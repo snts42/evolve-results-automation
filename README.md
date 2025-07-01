@@ -12,30 +12,46 @@ It operates by automating browser actions and is for use by those with legitimat
 
 - Logs in and navigates to the Evolve Results section.
 - Downloads all result data into an Excel spreadsheet (`exam_results.xlsx`).
-- (Work in progress) Downloads all candidate reports as PDFs into an organized folder structure.
+- Extracts and saves direct PDF links for candidate reports.
+- Downloads all candidate reports as PDFs into an organised folder structure by date.
 - Comprehensive logging and error handling for auditability and troubleshooting.
 
 ## Usage
 
-1. **Clone the repository:**  
+There are **two scripts** included for modularity and ease of deployment:
 
-2. **Install dependencies:** 
+1. **`evolve_scraper.py`**  
+   - Logs in, navigates, and scrapes all exam results and PDF report URLs.
+   - Outputs everything to `exam_results.xlsx`.
 
-3. **Download and place ChromeDriver:**  
-Ensure your version of `chromedriver.exe` matches your Chrome browser and is placed in the project root.
+2. **`reports_downloader.py`**  
+   - Reads the Excel, downloads all linked candidate reports, and organises them in folders by year/month/day.
+   - Updates the Excel to track downloaded files.
 
+> **Note:**  
+> At present, the report scraping and download process is still **semi-manual for testing**:  
+> The tool will prompt the user to press Enter at various steps (such as confirming page loads or after certain browser actions).  
+> This ensures stability during development and troubleshooting.  
+> A fully automated, "headless" version is planned for future releases, once all edge cases and are resolved.
+
+### Steps
+
+1. **Clone the repository.**  
+2. **Install dependencies.**  
+3. **Download and place ChromeDriver** (matching your Chrome version) in the project root.  
 4. **Prepare credentials:**  
-Edit `credentials.json` and enter your Evolve username and password.
+   Edit **`credentials.json`** and enter your Evolve username and password.  
+5. **Run `evolve_scraper.py`** to extract results and links.  
+6. **Run `reports_downloader.py`** to download all reports.
 
-5. **Run the script:**  
+## Dependencies
 
-The script will prompt you for manual steps as needed. Automated mode can be added in future updates.
-
-## Configuration
-
-- Configurable parameters are at the top of `evolve_scraper.py`.
-- Results are saved in `exam_results.xlsx`.
-- Candidate reports are downloaded into the `reports/` directory, organized by date.
+- Python 3.7 or later (tested on 3.13.3)
+- [Selenium](https://pypi.org/project/selenium/)
+- [pandas](https://pypi.org/project/pandas/)
+- [requests](https://pypi.org/project/requests/)
+- [openpyxl](https://pypi.org/project/openpyxl/)
+- Chrome + [ChromeDriver](https://sites.google.com/chromium.org/driver/)
 
 ## Security, Disclaimer, and Responsible Use
 
@@ -54,5 +70,3 @@ MIT. See [LICENSE](LICENSE) for details.
 
 **Author:**  
 Alex Santonastaso | [santonastaso.codes](https://santonastaso.codes)
-
----

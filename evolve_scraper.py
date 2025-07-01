@@ -1,8 +1,13 @@
+import os
 import time
 import json
-import os
+import shutil
+import re
+import requests
 import pandas as pd
+
 from datetime import datetime
+from typing import List, Dict, Set
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.service import Service
@@ -10,49 +15,82 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
+
+def extract_pdf_filename_from_html(html):
+    # Search for .pdf files in the HTML
+    match = re.search(r'([a-f0-9\-]{36}\.pdf)', html)
+    if match:
+        return match.group(1)
+    return None
+
+def download_pdf_with_cookies(driver, pdf_url, save_path):
+    """Download PDF using session cookies from Selenium driver."""
+    session = requests.Session()
+    # Transfer cookies from Selenium to requests
+    for cookie in driver.get_cookies():
+        session.cookies.set(cookie['name'], cookie['value'])
+    r = session.get(pdf_url, stream=True)
+    if r.status_code == 200:
+        with open(save_path, 'wb') as f:
+            for chunk in r.iter_content(10240):
+                f.write(chunk)
+        log(f"PDF downloaded and saved to {save_path}")
+        return True
+    else:
+        log(f"Failed to download PDF. Status: {r.status_code}")
+        return False
+
 # ---- CONFIGURATION ----
 CHROME_DRIVER_PATH = "chromedriver.exe"
 CREDENTIALS_FILE = "credentials.json"
 EXCEL_FILE = "exam_results.xlsx"
 REPORTS_BASE = "reports"
-YEAR = datetime.now().year
+DOWNLOAD_DIR = os.path.join(os.getcwd(), REPORTS_BASE, "_downloads")  # Temporary download location
 
 # ---- LOGGING ----
-def log(msg):
+def log(msg: str):
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     print(f"{timestamp} | {msg}")
 
 # ---- EXCEL MANAGEMENT ----
-def initialize_excel(filepath, columns):
+def initialize_excel(filepath: str, columns: List[str]):
     if not os.path.exists(filepath):
         log(f"Excel file not found. Creating {filepath}")
         pd.DataFrame(columns=columns).to_excel(filepath, index=False)
 
-def load_existing_results(filepath):
+def load_existing_results(filepath: str) -> pd.DataFrame:
     if not os.path.exists(filepath):
         return pd.DataFrame()
     return pd.read_excel(filepath, dtype=str)
 
-def save_results(filepath, df):
+def save_results(filepath: str, df: pd.DataFrame):
     df.to_excel(filepath, index=False)
 
 # ---- CREDENTIALS ----
-def load_credentials(json_file):
+def load_credentials(json_file: str):
     with open(json_file, 'r') as f:
         creds = json.load(f)
     return creds['username'], creds['password']
 
 # ---- SELENIUM SETUP ----
-def start_driver():
+def start_driver(download_dir: str) -> webdriver.Chrome:
     chrome_options = Options()
     chrome_options.add_argument("--start-maximized")
-    # chrome_options.add_argument("--headless")  # For automation
+    chrome_options.add_argument("--force-device-scale-factor=0.5")
+    # Optionally set browser zoom factor, e.g., 80%: chrome_options.add_argument("--force-device-scale-factor=0.8")
+    prefs = {
+        "download.default_directory": download_dir,
+        "download.prompt_for_download": False,
+        "download.directory_upgrade": True,
+        #"plugins.always_open_pdf_externally": True,
+    }
+    chrome_options.add_experimental_option("prefs", prefs)
     service = Service(executable_path=CHROME_DRIVER_PATH)
     driver = webdriver.Chrome(service=service, options=chrome_options)
     return driver
 
 # ---- UTILS ----
-def step(msg):
+def step(msg: str):
     log(f"STEP: {msg}")
     input("\nPress Enter to continue...\n")
 
@@ -67,28 +105,7 @@ def safe_find(driver, by, value, timeout=15):
 def wait_for_element(driver, by, value, timeout=15):
     return WebDriverWait(driver, timeout).until(EC.presence_of_element_located((by, value)))
 
-def get_pdf_original_url_from_shadow_dom(driver, timeout=20):
-    import time
-    t0 = time.time()
-    while time.time() - t0 < timeout:
-        try:
-            # 1. Find the shadow host <pdf-viewer id="viewer">
-            shadow_host = driver.find_element(By.CSS_SELECTOR, "pdf-viewer#viewer")
-            # 2. Get its shadow root
-            shadow_root = driver.execute_script('return arguments[0].shadowRoot', shadow_host)
-            # 3. Find the <embed> inside the shadow root
-            # The <embed> is under #main > #scroller > #size > #contents > embed
-            embed = shadow_root.find_element(By.CSS_SELECTOR, '#main #scroller #size #contents embed')
-            url = embed.get_attribute("original-url")
-            if url and ".pdf" in url.lower():
-                return url
-        except Exception as e:
-            pass  # Not loaded yet
-        time.sleep(1)
-    return None
-
-def make_report_folder_path(date_str):
-    """Given date string like '21/06/2025', returns folder like reports/2025/06 21"""
+def make_report_folder_path(date_str: str) -> str:
     dt = datetime.strptime(date_str, "%d/%m/%Y")
     year = dt.strftime("%Y")
     month_day = dt.strftime("%m %d")
@@ -96,8 +113,7 @@ def make_report_folder_path(date_str):
     os.makedirs(folder, exist_ok=True)
     return folder
 
-def report_filename(row):
-    # Example: Mustafa Eden - 4748-113 Functional Skills English Reading Level 2 - Pass.pdf
+def report_filename(row: Dict) -> str:
     parts = [
         str(row["First name"]).strip(),
         str(row["Last name"]).strip(),
@@ -105,19 +121,44 @@ def report_filename(row):
         str(row["Result"]).strip()
     ]
     fname = " - ".join(parts) + ".pdf"
-    # Clean up forbidden filename chars
     fname = "".join(c for c in fname if c not in r'\/:*?"<>|')
     return fname
 
-def unique_row_hash(row):
-    """Returns a string that uniquely identifies a row for deduplication."""
+def unique_row_hash(row: Dict) -> str:
     fields = [
         "Candidate ref.", "First name", "Last name", "Completed", "Test Name", "Result"
     ]
     return "|".join([str(row.get(f, "")).strip().lower() for f in fields])
 
+def wait_for_and_move_pdf(download_dir: str, target_dir: str, target_name: str, timeout=60) -> str:
+    t0 = time.time()
+    before = set(os.listdir(download_dir))
+    pdf_path = None
+
+    while time.time() - t0 < timeout:
+        files = set(os.listdir(download_dir))
+        new_files = files - before
+        ready_files = [f for f in new_files if f.endswith('.pdf') and not f.endswith('.crdownload')]
+        if ready_files:
+            latest_pdf = max(
+                (os.path.join(download_dir, f) for f in ready_files),
+                key=os.path.getctime
+            )
+            pdf_path = latest_pdf
+            break
+        time.sleep(1)
+
+    if not pdf_path:
+        raise Exception("PDF did not appear in download directory within timeout.")
+
+    os.makedirs(target_dir, exist_ok=True)
+    dest_path = os.path.join(target_dir, target_name)
+    shutil.move(pdf_path, dest_path)
+    log(f"PDF moved to: {dest_path}")
+    return dest_path
+
 # ---- LOGIN ----
-def login(driver, username, password):
+def login(driver, username: str, password: str):
     driver.get("https://evolve.cityandguilds.com/Login")
     step("Loaded login page. Check browser.")
     user_box = safe_find(driver, By.ID, "UserName")
@@ -159,7 +200,6 @@ def switch_to_default(driver):
     log("Switched back to default content.")
 
 def reset_and_refresh(driver):
-    # Must be inside iframe!
     try:
         refresh_btn = safe_find(driver, By.XPATH, "//i[contains(@class,'dx-icon-refresh')]")
         refresh_btn.click()
@@ -169,8 +209,7 @@ def reset_and_refresh(driver):
         log("Refresh button not found. Skipping.")
 
 # ---- TABLE SCRAPING ----
-def parse_results_table(driver, existing_hashes):
-    # Must be inside iframe!
+def parse_results_table(driver, existing_hashes: Set[str]) -> List[Dict]:
     row_xpath = (
         "//div[contains(@class, 'dx-datagrid-rowsview')]"
         "//table[contains(@class, 'dx-datagrid-table')]"
@@ -182,11 +221,8 @@ def parse_results_table(driver, existing_hashes):
 
     all_rows = []
     for idx, row in enumerate(rows):
-        driver.execute_script("arguments[0].scrollIntoView(true);", row)
-        time.sleep(0.05)
         cells = row.find_elements(By.TAG_NAME, "td")
-        cell_texts = [cell.text.strip() for cell in cells]
-        if not any(cell_texts) or len(cells) < 12:
+        if not any(cell.text.strip() for cell in cells) or len(cells) < 12:
             log(f"Skipping row {idx} - too few cells or all blank")
             continue
         data = {
@@ -216,8 +252,7 @@ def parse_results_table(driver, existing_hashes):
     return all_rows
 
 # ---- TABLE ROW SELECTION ----
-def select_table_row(driver, row):
-    """Selects the row that matches all the unique_fields"""
+def select_table_row(driver, row: Dict) -> bool:
     row_xpath = (
         "//div[contains(@class, 'dx-datagrid-rowsview')]"
         "//table[contains(@class, 'dx-datagrid-table')]"
@@ -228,12 +263,13 @@ def select_table_row(driver, row):
         tds = tr.find_elements(By.TAG_NAME, "td")
         if not tds or len(tds) < 12:
             continue
-        matches = True
-        for col, idx in [("Candidate ref.", 2), ("First name", 3), ("Last name", 4),
-                         ("Completed", 5), ("Test Name", 7), ("Result", 8)]:
-            if tds[idx].text.strip() != str(row[col]).strip():
-                matches = False
-                break
+        matches = all(
+            tds[idx].text.strip() == str(row[col]).strip()
+            for col, idx in [
+                ("Candidate ref.", 2), ("First name", 3), ("Last name", 4),
+                ("Completed", 5), ("Test Name", 7), ("Result", 8)
+            ]
+        )
         if matches:
             driver.execute_script("arguments[0].scrollIntoView(true);", tr)
             tr.click()
@@ -243,7 +279,7 @@ def select_table_row(driver, row):
     log("Could not find table row to select!")
     return False
 
-def click_candidate_report_button(driver):
+def click_candidate_report_button(driver) -> bool:
     try:
         btn = safe_find(driver, By.ID, "button_candidatereport")
         btn.click()
@@ -254,45 +290,28 @@ def click_candidate_report_button(driver):
         log(f"Failed to click Candidate Report button: {e}")
         return False
 
-# ---- PDF DOWNLOAD ----
-def download_pdf_from_url(url, save_path):
-    import requests
-    try:
-        r = requests.get(url, stream=True)
-        r.raise_for_status()
-        with open(save_path, "wb") as f:
-            for chunk in r.iter_content(chunk_size=8192):
-                f.write(chunk)
-        log(f"PDF downloaded: {save_path}")
-        return True
-    except Exception as e:
-        log(f"Failed to download PDF: {e}")
-        return False
-
 # ---- MAIN PROCESS ----
 def main():
     columns = [
         "Keycode", "Candidate ref.", "First name", "Last name", "Completed",
         "Subject", "Test Name", "Result", "Percent", "Duration", "Centre Name",
-        "Downloaded At", "Report Downloaded At",
+        "Downloaded At", "Report Downloaded At", "PDF Direct Link",
         "Result Sent", "E-Certificate Sent", "Certificate Issued", "Comments"
     ]
+    os.makedirs(DOWNLOAD_DIR, exist_ok=True)
     initialize_excel(EXCEL_FILE, columns)
     existing_df = load_existing_results(EXCEL_FILE)
-    if existing_df.empty:
-        existing_hashes = set()
-    else:
-        existing_hashes = set(unique_row_hash(row) for _, row in existing_df.iterrows())
+    existing_hashes = set(unique_row_hash(row) for _, row in existing_df.iterrows()) if not existing_df.empty else set()
     username, password = load_credentials(CREDENTIALS_FILE)
 
-    driver = start_driver()
+    driver = start_driver(DOWNLOAD_DIR)
     try:
         login(driver, username, password)
         goto_results_tab(driver)
-
+        
         switch_to_results_iframe(driver)
         reset_and_refresh(driver)
-        step("In Results iframe. Scroll to load all results. Then press Enter.")
+        step("In Results iframe. All results should fit in one page. Then press Enter.")
         new_rows = parse_results_table(driver, existing_hashes)
         if new_rows:
             new_df = pd.DataFrame(new_rows)
@@ -303,9 +322,7 @@ def main():
             result_df = existing_df.copy()
             log("No new rows found.")
 
-        # ----------- DOWNLOAD REPORTS -------------
-        # Only switch to iframe ONCE before processing
-        for idx, row in result_df[(result_df["Report Downloaded At"].isnull()) | (result_df["Report Downloaded At"] == "")].iterrows():
+        for idx, row in result_df[(result_df["PDF Direct Link"].isnull()) | (result_df["PDF Direct Link"] == "") | (result_df["PDF Direct Link"] == "NOT FOUND")].iterrows():
             try:
                 log(f"--- Processing row idx={idx}: {row.to_dict()}")
                 step(f"About to process: {row['First name']} {row['Last name']} ({row['Test Name']}).")
@@ -320,40 +337,36 @@ def main():
                 ok = click_candidate_report_button(driver)
                 if not ok:
                     log(f"Candidate Report button failed. Skipping.")
-                    # Go back to iframe for next candidate
                     switch_to_results_iframe(driver)
                     continue
 
-                step("Candidate report opened. Wait for PDF viewer to load, then press Enter.")
-                # 3. Get PDF original-url from embed
-                pdf_url = get_pdf_original_url_from_shadow_dom(driver)
-                if not pdf_url:
-                    log("Could not find PDF <embed> with original-url. Skipping.")
-                    # Go back to results tab if necessary, then to iframe
-                    goto_results_tab(driver)
-                    switch_to_results_iframe(driver)
-                    continue
+                step("Candidate report opened. Waiting for PDF filename in toolbar... Press Enter to continue if visible.")
+                with open("debug_after_candidate_report.html", "w", encoding="utf-8") as f:
+                    f.write(driver.page_source)
+                log("Dumped HTML after candidate report to debug_after_candidate_report.html")
 
-                log(f"Found PDF URL: {pdf_url}")
-                # 4. Download PDF
-                folder = make_report_folder_path(row["Completed"])
-                fname = report_filename(row)
-                fpath = os.path.join(folder, fname)
-                downloaded = download_pdf_from_url(pdf_url, fpath)
-                # 5. Update Excel
-                if downloaded:
-                    result_df.at[idx, "Report Downloaded At"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                html = driver.page_source
+                file_name = extract_pdf_filename_from_html(html)
+
+                if file_name:
+                    pdf_url = f"https://evolve.cityandguilds.com/secureassess/CustomerData/Evolve/DocumentStore/{file_name}"
+                    log(f"PDF direct link: {pdf_url}")
+                    # Save link to DataFrame
+                    result_df.at[idx, "PDF Direct Link"] = pdf_url
                     save_results(EXCEL_FILE, result_df)
-                step(f"Processed {row['First name']} {row['Last name']} - move to next candidate?")
+                else:
+                    log("No PDF file name found! Skipping.")
+                    result_df.at[idx, "PDF Direct Link"] = "NOT FOUND"
+                    save_results(EXCEL_FILE, result_df)
 
-                # After download, go back to Results tab, then switch to iframe again for next loop
-                goto_results_tab(driver)
-                switch_to_results_iframe(driver)
-                reset_and_refresh(driver)
+                driver.switch_to.default_content()    
+                results_tab = safe_find(driver, By.XPATH, "//a[@href='#TestAdministration/Results']")
+                results_tab.click()
+                step("Results tab opened. Please check Results table visible.")
+                switch_to_results_iframe(driver)           
 
             except Exception as e:
                 log(f"Error processing row idx={idx}: {e}")
-                # Try to recover context for next iteration
                 try:
                     goto_results_tab(driver)
                     switch_to_results_iframe(driver)
@@ -362,6 +375,11 @@ def main():
                     break
 
     finally:
+        result_df["Completed"] = pd.to_datetime(result_df["Completed"], dayfirst=True, errors='coerce')
+        result_df = result_df.sort_values("Completed", ascending=True)
+        result_df["Completed"] = result_df["Completed"].dt.strftime('%d/%m/%Y')
+        save_results(EXCEL_FILE, result_df)
+
         driver.quit()
         log("Chrome closed.")
 

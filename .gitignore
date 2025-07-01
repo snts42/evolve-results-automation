@@ -1,12 +1,10 @@
 # Credentials and output
-# (Leave credentials.json for initial commit, but add after first push)
-# credentials.json
+
 
 # Logs
 *.log
-debug_failed_to_find_*.html
+*.html
 
 # Local folders not for repo
-Evolve HTML/
 reports/
 exam_results.xlsx
