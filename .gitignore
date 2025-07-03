@@ -1,4 +1,4 @@
-# Credentials and output
+# Credentials
 credentials.json
 
 # Logs
@@ -7,4 +7,5 @@ credentials.json
 
 # Local folders not for repo
 reports/
+logs/
 exam_results.xlsx
