@@ -10,6 +10,6 @@ backups/
 reports/
 logs/
 exam_results.xlsx
-evolve-results-automation.exe
+*.exe
 INSTRUCTIONS.TXT
 __pycache__/

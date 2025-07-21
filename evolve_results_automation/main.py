@@ -20,6 +20,9 @@ from evolve_results_automation.credentials_utils import load_credentials
 
 import requests
 
+from evolve_results_automation.logging_utils import setup_logger, log
+setup_logger()
+
 def pre_run_check():
     from colorama import init, Fore, Style
     import os, sys
@@ -33,20 +36,20 @@ def pre_run_check():
 | |___\ \_/ | \_/ / |___\ \_/ / |___  | | | | |_| | | | \ \_/ / |  | | | | || |  _| |_\ \_/ / |\  |
 \____/ \___/ \___/\_____/\___/\____/  \_| |_/\___/  \_/  \___/\_|  |_|_| |_/\_/  \___/ \___/\_| \_/
 {Style.RESET_ALL}
-{Fore.CYAN}{Style.BRIGHT}
+{Fore.WHITE}{Style.BRIGHT}
                   Evolve Results Automation Tool by snts42
 {Style.RESET_ALL}
 """
     print(ascii_logo)
     print(Fore.GREEN + "=" * 100)
-    print(Fore.CYAN + "  Welcome to Evolve Results Automation Tool")
+    print(Fore.WHITE + "WELCOME TO THE EVOLVE RESULTS AUTOMATION TOOL!")
     print(Fore.GREEN + "=" * 100 + Style.RESET_ALL)
     print(
-        Fore.WHITE +
-        "Automate the retrieval and download of exam results/reports\n"
+        Fore.GREEN +
+        "Automate the retrieval and download of exam results\n"
         "from the City & Guilds Evolve platform."
-        f"\n{Fore.GREEN}Make sure your {Fore.CYAN}'credentials.json'{Fore.GREEN} file is present and up to date."
-        f"\nIf not, copy {Fore.CYAN}'credentials_example.json'{Fore.GREEN} and edit it.\n"
+        f"\n{Fore.GREEN}Make sure your {Fore.WHITE}'credentials.json'{Fore.GREEN} file is present and up to date."
+        f"\nIf not, copy {Fore.WHITE}'credentials_example.json'{Fore.GREEN} and edit it.\n"
     )
     if not os.path.exists(CREDENTIALS_FILE):
         print(
@@ -55,16 +58,32 @@ def pre_run_check():
         )
         input(Fore.CYAN + "Press Enter to exit..." + Style.RESET_ALL)
         sys.exit(1)
-    input(Fore.CYAN + "Press Enter to continue..." + Style.RESET_ALL)
 
-
-def setup_logging(log_file):
-    logging.basicConfig(
-        filename=log_file,
-        level=logging.INFO,
-        format='%(asctime)s | %(levelname)s | %(message)s'
-    )
-    logging.getLogger().addHandler(logging.StreamHandler())  # Also log to console
+    else:
+        try:
+            accounts = load_credentials(CREDENTIALS_FILE)
+            print(Fore.GREEN + f"\nFound '{CREDENTIALS_FILE}' with {len(accounts)} credential(s):")
+            for idx, acc in enumerate(accounts, 1):
+                user = acc.get('username', '(missing username)')
+                print(Fore.CYAN + f"  [{idx}] {user}")
+        except Exception as e:
+            print(Fore.RED + f"\nERROR: Unable to load credentials: {e}")
+            input(Fore.CYAN + "Press Enter to exit..." + Style.RESET_ALL)
+            sys.exit(1)
+    
+    while True:
+        headless_input = input(
+            Fore.GREEN + "\nRun in HEADLESS (no browser window) mode? [Y/n]: " + Style.RESET_ALL
+        ).strip().lower()
+        if headless_input in ("y", "yes"):
+            headless = True
+            break
+        elif headless_input in ("n", "no"):
+            headless = False
+            break
+        else:
+            print(Fore.YELLOW + "Please enter 'Y' or 'N'." + Style.RESET_ALL)
+    return headless
 
 def make_report_folder_path(date_str: str) -> str:
     dt = datetime.strptime(date_str, "%d/%m/%Y")
@@ -92,8 +111,7 @@ def unique_row_hash(row):
     return "|".join([str(row.get(f, "")).strip().lower() for f in fields])
 
 def main():
-    pre_run_check()
-    setup_logging(LOG_FILE)
+    headless = pre_run_check()
 
     columns = [
         "Candidate ref.", "First name", "Last name", "Completed",
@@ -126,7 +144,7 @@ def main():
             continue
 
         logging.info(f"--- Starting for account #{idx_acc+1}: {username} ---")
-        driver = start_driver()
+        driver = start_driver(headless=headless)
         try:
             login(driver, username, password)
             goto_results_tab(driver)
