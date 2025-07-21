@@ -6,6 +6,10 @@ credentials.json
 *.html
 
 # Local folders not for repo
+backups/
 reports/
 logs/
 exam_results.xlsx
+evolve-results-automation.exe
+INSTRUCTIONS.TXT
+__pycache__/
