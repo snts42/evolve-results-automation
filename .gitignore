@@ -13,3 +13,5 @@ exam_results.xlsx
 *.exe
 INSTRUCTIONS.TXT
 __pycache__/
+build/
+dist/

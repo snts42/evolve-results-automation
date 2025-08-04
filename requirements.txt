@@ -1,0 +1,6 @@
+selenium>=4.33.0
+pandas>=2.3.0
+requests>=2.32.3
+openpyxl>=3.1.5
+colorama>=0.4.6
+cryptography>=45.0.5

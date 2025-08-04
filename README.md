@@ -2,60 +2,75 @@
 
 ## Introduction
 
-This is an **unofficial, open-source tool** to automate the retrieval and download of exam results and candidate reports from the City & Guilds Evolve platform, which lacks official API support.  
-It is designed to assist centre/admin staff in downloading all candidate results and reports in a consistent, auditable, and efficient manner—saving hours of manual work and reducing human error.
+**Evolve Results Automation** is an open-source tool for exam centre staff to securely automate the download of candidate results and reports from the City & Guilds Evolve platform, which lacks official API support.
 
-**This tool is intended for internal/admin use only.**  
-It operates by automating browser actions and is for use by those with legitimate access to the Evolve platform. Never run this tool on untrusted machines. The project respects privacy, your data, and the Terms of Service of the sites you access.
+- Designed for internal/admin use only
+- Automates browser actions (Selenium)
+- All credentials are stored securely using AES-256 encryption
+- Provides a user-friendly .exe for non-technical users (no Python required)
 
 ## Features
 
-- Logs in and navigates to the Evolve Results section.
-- Downloads all result data into an Excel spreadsheet (`exam_results.xlsx`).
-- Extracts and saves direct PDF links for candidate reports.
-- Downloads all candidate reports as PDFs into an organised folder structure by date.
-- Supports multiple Evolve accounts (multi-credential).
-- Automatically logs each session with timestamped log files in a structured folder.
-- Comprehensive error handling for reliability and auditability.
-- Excel file is auto-filtered, columns auto-sized, and data is always kept up to date.
+- Logs into Evolve and navigates to the Results section
+- Downloads all results data into an Excel spreadsheet (`exam_results.xlsx`)
+- Extracts and saves direct PDF links for candidate reports
+- Downloads all candidate reports as PDFs into a structured folder by date
+- Supports multiple Evolve accounts (multi-credential access)
+- Robust error handling and logging
+- Encrypted credential management  via CLI or GUI menu
 
-## Which Script Should I Use?
+## Quick Start (.exe Users)
 
-- **`evolve_scraper+downloader.py`**  
-  The main, fully-automated script—handles scraping results and downloading PDF reports in one go.  
-  **Use this for normal operation.**
+1. Download the latest `.exe` from [Releases](https://github.com/snts42/evolve-results-automation/releases/) 
+2. Place `chromedriver.exe` (matching your installed Chrome version) in the same folder as the `.exe`
+3. Run the `.exe` and follow the prompts to set a master password and add your Evolve credentials
+4. Start the automation from the menu
+5. Results will be saved to `exam_results.xlsx`, PDFs in `reports/YYYY/MM DD/`, and logs in `logs/YYYY/MM DD/`
 
-- **`evolve_scraper.py`** & **`reports_downloader.py`**  
-  These are legacy and development scripts, originally used for separate scraping and downloading steps.  
-  They lack full automation, multi-account support, advanced logging, Excel formatting, and other new features.  
-  Provided for reference or testing only.
+> **If you forget your master password:**
+> Delete the `credentials.enc` file and restart the program to re-onboard.
 
-## Usage Overview
+## For Python Users / Developers
 
-1. Clone/download the repository.
-2. Install Python dependencies (see below).
-3. Place `chromedriver.exe` (matching your Chrome version) in the project root.
-4. Add your credentials in `credentials.json` (supports one or more accounts).
-5. Run `evolve_scraper+downloader.py`.
-6. Results will be saved to `exam_results.xlsx`, PDF reports in `reports/YYYY/MM DD/`, and logs in `logs/YYYY/MM DD/`.
+1. Clone/download this repository
+2. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+3. Run:
+   ```bash
+   python -m evolve_results_automation.main
+   ```
 
 ## Dependencies
 
-- Python 3.7 or later (tested on 3.13.3)
-- Selenium
-- pandas
-- requests
-- openpyxl
-- Chrome + ChromeDriver
+- Python >= 3.13.3
+- selenium >= 4.33.0
+- pandas >= 2.3.0
+- requests >= 2.32.3
+- openpyxl >= 3.1.5
+- colorama >= 0.4.6
+- cryptography >= 45.0.5
 
-## Security, Disclaimer, and Responsible Use
+## Security & Credential Management
 
-- **For internal/admin use only.**
-- Use with your own credentials; never share or publish your credentials file.
-- The authors and contributors are not affiliated with City & Guilds or Evolve.  
-- **You are solely responsible** for use, compliance, and any consequences.
-- This tool is an assistant and does not replace your professional judgment or compliance obligations.
-- All actions are logged for your audit and troubleshooting.
+- **All credentials are stored encrypted** (AES-256, master password required)
+- No plaintext credentials are ever written to disk
+- You must remember your master password; if lost, delete `credentials.enc` to reset
+- Master password is prompted only once per session
+- No legacy `.json` plain-text credentials logic remains
+
+## ChromeDriver Troubleshooting
+
+- You **must** use a `chromedriver.exe` version that matches your installed Google Chrome version
+- If the automation fails to start ChromeDriver, you will see a clear error message
+- Download the correct ChromeDriver from: https://chromedriver.chromium.org/downloads
+
+## Versioning & Release Notes
+
+- **Current release:** v0.2.0
+- This is a major security and usability update (encrypted credentials, .exe support, no legacy code)
+- All previous `.py` scripts and plaintext credential logic are obsolete
 
 ## License
 

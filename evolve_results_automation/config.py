@@ -2,7 +2,7 @@ import os
 from datetime import datetime
 
 CHROME_DRIVER_PATH = "chromedriver.exe"
-CREDENTIALS_FILE = "credentials.json"
+ENCRYPTED_CREDENTIALS_FILE = "credentials.enc"
 EXCEL_FILE = "exam_results.xlsx"
 REPORTS_BASE = "reports"
 LOGS_BASE = "logs"
