@@ -39,7 +39,7 @@ def safe_find(driver, by, value, timeout=15):
 
 def login(driver, username: str, password: str):
     driver.get("https://evolve.cityandguilds.com/Login")
-    time.sleep(6)
+    time.sleep(3)
     user_box = safe_find(driver, By.ID, "UserName")
     pass_box = safe_find(driver, By.ID, "Password")
     user_box.clear()
@@ -48,25 +48,19 @@ def login(driver, username: str, password: str):
     pass_box.send_keys(password)
     login_btn = safe_find(driver, By.XPATH, "//input[@type='submit' and @value='Login']")
     login_btn.click()
-    time.sleep(6)
     logging.info("Login submitted. Wait for dashboard to load...")
 
 def goto_results_tab(driver):
-    driver.get("https://evolve.cityandguilds.com/#TestAdministration/Results")
-    time.sleep(6)
-    test_admin = safe_find(driver, By.XPATH, "//a[@data-id='TestAdministration']")
-    test_admin.click()
-    time.sleep(6)
+    driver.get("https://evolve.cityandguilds.com/#TestAdministration")
+    time.sleep(4)
     results_tab = safe_find(driver, By.XPATH, "//a[@href='#TestAdministration/Results']")
     results_tab.click()
-    time.sleep(6)
     logging.info("Results tab opened. Please check Results table visible.")
 
 def switch_to_results_iframe(driver, timeout=15):
-    time.sleep(6)
+    time.sleep(5)
     iframe = safe_find(driver, By.ID, "TestAdministrationResultsFrame")
     driver.switch_to.frame(iframe)
-    time.sleep(6)
     logging.info("Switched to Results iframe.")
 
 def switch_to_default(driver):
@@ -77,23 +71,24 @@ def switch_to_default(driver):
 def reset_and_refresh(driver):
     refresh_btn = safe_find(driver, By.XPATH, "//i[contains(@class,'dx-icon-refresh')]")
     refresh_btn.click()
-    time.sleep(6)
+    time.sleep(4)
     logging.info("Refresh button clicked. Wait for table reload.")
 
 def parse_results_table(driver, existing_hashes, col_map):
-    time.sleep(6)
+    time.sleep(5)
     row_xpath = (
         "//div[contains(@class, 'dx-datagrid-rowsview')]"
         "//table[contains(@class, 'dx-datagrid-table')]"
         "/tbody/tr[contains(@class, 'dx-row') and not(contains(@class, 'dx-freespace-row'))]"
     )
     rows = driver.find_elements(By.XPATH, row_xpath)
-    logging.info(f"Found {len(rows)} data rows in the results table.")
     all_rows = []
+    real_rows = 0
     for idx, row in enumerate(rows):
         cells = row.find_elements(By.TAG_NAME, "td")
         if not any(cell.text.strip() for cell in cells) or len(cells) < 12:
             continue
+        real_rows += 1
         data = {
             col_map.get("Keycode", "Keycode"): cells[1].text.strip(),
             col_map.get("Candidate ref.", "Candidate ref."): cells[2].text.strip(),
@@ -123,10 +118,12 @@ def parse_results_table(driver, existing_hashes, col_map):
         if h in existing_hashes:
             continue
         all_rows.append(data)
+
+    logging.info(f"Found {real_rows} data rows in the results table, of which {len(all_rows)} are new.")
     return all_rows
 
 def select_table_row(driver, row):
-    time.sleep(6)
+    time.sleep(4)
     row_xpath = (
         "//div[contains(@class, 'dx-datagrid-rowsview')]"
         "//table[contains(@class, 'dx-datagrid-table')]"
@@ -156,12 +153,6 @@ def select_table_row(driver, row):
 def click_candidate_report_button(driver):
     btn = safe_find(driver, By.ID, "button_candidatereport")
     btn.click()
-    time.sleep(6)
     logging.info("Clicked Candidate Report button.")
+    time.sleep(2)
     return True
-
-def extract_pdf_filename_from_html(html):
-    match = re.search(r'([a-f0-9\-]{36}\.pdf)', html)
-    if match:
-        return match.group(1)
-    return None
