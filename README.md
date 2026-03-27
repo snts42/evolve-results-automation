@@ -22,10 +22,11 @@
 ## Quick Start (.exe Users)
 
 1. Download the latest `.exe` from [Releases](https://github.com/snts42/evolve-results-automation/releases/) 
-2. Place `chromedriver.exe` (matching your installed Chrome version) in the same folder as the `.exe`
-3. Run the `.exe` and follow the prompts to set a master password and add your Evolve credentials
-4. Start the automation from the menu
-5. Results will be saved to `exam_results.xlsx`, PDFs in `reports/YYYY/MM DD/`, and logs in `logs/YYYY/MM DD/`
+2. Run the `.exe` and follow the prompts to set a master password and add your Evolve credentials
+3. Start the automation from the menu
+4. Results will be saved to `exam_results.xlsx`, PDFs in `reports/YYYY/MM DD/`, and logs in `logs/YYYY/MM DD/`
+
+> **Note:** ChromeDriver is managed automatically. Just make sure Google Chrome is installed.
 
 > **If you forget your master password:**
 > Delete the `credentials.enc` file and restart the program to re-onboard.
@@ -60,16 +61,18 @@
 - Master password is prompted only once per session
 - No legacy `.json` plain-text credentials logic remains
 
-## ChromeDriver Troubleshooting
+## ChromeDriver
 
-- You **must** use a `chromedriver.exe` version that matches your installed Google Chrome version
-- If the automation fails to start ChromeDriver, you will see a clear error message
-- Download the correct ChromeDriver from: https://chromedriver.chromium.org/downloads
+ChromeDriver is managed automatically by Selenium Manager (built into Selenium 4.6+). You do **not** need to download or update ChromeDriver manually — it is resolved automatically based on your installed Chrome version.
+
+If you encounter issues starting Chrome, ensure:
+- Google Chrome is installed on your machine
+- You have internet access (for the initial ChromeDriver download)
 
 ## Versioning & Release Notes
 
-- **Current release:** v0.2.0
-- This is a major security and usability update (encrypted credentials, .exe support, no legacy code)
+- **Current release:** v0.2.1
+- Encrypted credentials, `.exe` support, automatic ChromeDriver management
 - All previous `.py` scripts and plaintext credential logic are obsolete
 
 ## License

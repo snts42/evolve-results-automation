@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 import logging
 import pandas as pd
 import requests
@@ -97,7 +98,7 @@ class EvolveAutomation:
                         logging.info(f"Processing for PDF link: {row['First name']} {row['Last name']} ({row['Test Name']})")
                         select_table_row(driver, row)
                         click_candidate_report_button(driver)
-                        driver.implicitly_wait(6)
+                        time.sleep(6)
                         html = driver.page_source
                         file_name = extract_pdf_filename_from_html(html)
                         if file_name:
@@ -129,7 +130,7 @@ class EvolveAutomation:
                         # Reopen results tab/iframe after report
                         results_tab = safe_find(driver, By.XPATH, "//a[@href='#TestAdministration/Results']")
                         results_tab.click()
-                        driver.implicitly_wait(6)
+                        time.sleep(6)
                         switch_to_results_iframe(driver)
                         reset_and_refresh(driver)
                     except Exception as e:

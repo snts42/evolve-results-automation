@@ -4,11 +4,9 @@ import logging
 from datetime import datetime
 from selenium import webdriver
 from selenium.webdriver.common.by import By
-from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from .config import CHROME_DRIVER_PATH
 
 def start_driver(headless=True):   
     chrome_options = Options()
@@ -18,13 +16,12 @@ def start_driver(headless=True):
         chrome_options.add_argument("--headless=new")
     chrome_options.add_argument("--log-level=3") 
     chrome_options.add_experimental_option('excludeSwitches', ['enable-logging']) 
-    service = Service(executable_path=CHROME_DRIVER_PATH)
     try:
-        driver = webdriver.Chrome(service=service, options=chrome_options)
+        driver = webdriver.Chrome(options=chrome_options)
     except Exception as e:
-        print("\nERROR: Failed to start ChromeDriver.\n" \
-              "Please ensure that 'chromedriver.exe' matches your installed version of Google Chrome.\n" \
-              "You can download the correct version from: https://chromedriver.chromium.org/downloads\n" \
+        print("\nERROR: Failed to start Chrome.\n" \
+              "Please ensure Google Chrome is installed.\n" \
+              "ChromeDriver is managed automatically by Selenium Manager.\n" \
               f"Original error: {e}")
         raise
     return driver

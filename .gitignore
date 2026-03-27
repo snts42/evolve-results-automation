@@ -1,17 +1,36 @@
 # Credentials
 credentials.json
+credentials.enc
+
+# Binaries and drivers
+*.exe
+chromedriver*
+
+# Build artifacts
+build/
+dist/
+*.spec
+
+# Debug files
+*.html
 
 # Logs
 *.log
-*.html
 
-# Local folders not for repo
+# Local data not for repo
 backups/
 reports/
 logs/
 exam_results.xlsx
-*.exe
+
+# Internal docs
 INSTRUCTIONS.TXT
+IMPLEMENTATION_ROADMAP.md
+
+# Python
 __pycache__/
-build/
-dist/
+*.pyc
+
+# ChromeDriver licenses (no longer needed — driver is auto-managed)
+LICENSE.chromedriver
+THIRD_PARTY_NOTICES.chromedriver

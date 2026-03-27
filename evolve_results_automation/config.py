@@ -1,11 +1,13 @@
 import os
+import sys
 from datetime import datetime
 
-CHROME_DRIVER_PATH = "chromedriver.exe"
-ENCRYPTED_CREDENTIALS_FILE = "credentials.enc"
-EXCEL_FILE = "exam_results.xlsx"
-REPORTS_BASE = "reports"
-LOGS_BASE = "logs"
+BASE_DIR = os.path.dirname(os.path.abspath(sys.argv[0]))
+
+ENCRYPTED_CREDENTIALS_FILE = os.path.join(BASE_DIR, "credentials.enc")
+EXCEL_FILE = os.path.join(BASE_DIR, "exam_results.xlsx")
+REPORTS_BASE = os.path.join(BASE_DIR, "reports")
+LOGS_BASE = os.path.join(BASE_DIR, "logs")
 
 def current_log_path():
     now = datetime.now()
