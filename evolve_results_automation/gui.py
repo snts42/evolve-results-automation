@@ -13,6 +13,14 @@ class EvolveGUI:
         init(autoreset=True)
         self.manager = SecureCredentialManager(ENCRYPTED_CREDENTIALS_FILE)
     
+    def _prompt_master_password(self, prompt_text="Enter master password for encrypted credentials"):
+        """Prompt for master password with validation."""
+        password = getpass.getpass(f"{Fore.WHITE + Style.BRIGHT}{prompt_text}: {Style.RESET_ALL}").strip()
+        if not password:
+            print(f"{Fore.RED}Master password cannot be empty.{Style.RESET_ALL}")
+            return None
+        return password
+    
     def show_banner(self):
         ascii_art = r""" _____ _   _ _____ _     _   _ _____    ___  _   _ _____ ________  ___ ___ _____ _____ _____ _   _ 
 |  ___| | | |  _  | |   | | | |  ___|  / _ \| | | |_   _|  _  |  \/  |/ _ \_   _|_   _|  _  | \ | |
@@ -171,9 +179,8 @@ class EvolveGUI:
             print(f"{Fore.YELLOW}No credentials saved yet. Add your first credential to create the encrypted file.{Style.RESET_ALL}")
             return
         if not hasattr(self, 'master_password') or not self.master_password:
-            self.master_password = getpass.getpass(f"{Fore.WHITE + Style.BRIGHT}Enter master password for encrypted credentials: {Style.RESET_ALL}").strip()
+            self.master_password = self._prompt_master_password()
             if not self.master_password:
-                print(f"{Fore.RED}X Master password cannot be empty.{Style.RESET_ALL}")
                 return
         try:
             credentials = self.manager.list_credentials(master_password=self.master_password)
@@ -191,16 +198,10 @@ class EvolveGUI:
         # Prompt for master password if not set (onboarding or after reset)
         enc_file = ENCRYPTED_CREDENTIALS_FILE
         if not hasattr(self, 'master_password') or not self.master_password:
-            if not os.path.exists(enc_file):
-                self.master_password = getpass.getpass(f"{Fore.WHITE}Set master password for encrypted credentials: {Style.RESET_ALL}").strip()
-                if not self.master_password:
-                    print(f"{Fore.RED}Master password cannot be empty.{Style.RESET_ALL}")
-                    return
-            else:
-                self.master_password = getpass.getpass(f"{Fore.WHITE}Enter master password for encrypted credentials: {Style.RESET_ALL}").strip()
-                if not self.master_password:
-                    print(f"{Fore.RED}Master password cannot be empty.{Style.RESET_ALL}")
-                    return
+            prompt = "Set master password for encrypted credentials" if not os.path.exists(enc_file) else "Enter master password for encrypted credentials"
+            self.master_password = self._prompt_master_password(prompt)
+            if not self.master_password:
+                return
 
         if username and password:
             try:
@@ -229,9 +230,8 @@ class EvolveGUI:
 
         # Prompt for master password if not set (onboarding or after reset)
         if not hasattr(self, 'master_password') or not self.master_password:
-            self.master_password = getpass.getpass(f"{Fore.WHITE + Style.BRIGHT}Enter master password for encrypted credentials: {Style.RESET_ALL}").strip()
+            self.master_password = self._prompt_master_password()
             if not self.master_password:
-                print(f"{Fore.RED}Master password cannot be empty.{Style.RESET_ALL}")
                 return
 
         if username:

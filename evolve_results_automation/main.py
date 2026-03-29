@@ -10,7 +10,7 @@ from selenium.webdriver.common.by import By
 from evolve_results_automation.gui import EvolveGUI
 
 from evolve_results_automation.config import (
-   ENCRYPTED_CREDENTIALS_FILE, EXCEL_FILE
+   ENCRYPTED_CREDENTIALS_FILE, EXCEL_FILE, COLUMNS
 )
 from evolve_results_automation.excel_utils import (
     initialize_excel, load_existing_results, save_results
@@ -23,7 +23,7 @@ from evolve_results_automation.selenium_utils import (
 
 from evolve_results_automation.secure_credentials import load_secure_credentials
 
-from evolve_results_automation.logging_utils import setup_logger, log
+from evolve_results_automation.logging_utils import setup_logger
 setup_logger()
 
 from evolve_results_automation.parsing_utils import make_report_folder_path, report_filename, extract_pdf_filename_from_html,unique_row_hash, get_column_map
@@ -42,13 +42,7 @@ class EvolveAutomation:
         self.headless = headless
         self.master_password = master_password
         self.stats = ProcessingStats()
-        self.columns = [
-            "Candidate ref.", "First name", "Last name", "Completed",
-            "Test Name", "Result", "Percent", "Duration", "Centre Name",
-            "Report URL", "Report Download", "Result Sent", "Result Sent By",
-            "E-Certificate", "E-Certificate By", "Certificate", "Certificate By",
-            "Comments", "Keycode", "Subject", "PDF Direct Link"
-        ]
+        self.columns = COLUMNS
         self.col_map = get_column_map()
 
     def run(self):

@@ -1,11 +1,11 @@
 import os
+import logging
 import pandas as pd
 from openpyxl import load_workbook
-from .logging_utils import log
 
 def initialize_excel(filepath: str, columns):
     if not os.path.exists(filepath):
-        log(f"Excel file not found. Creating {filepath}")
+        logging.info(f"Excel file not found. Creating {filepath}")
         df = pd.DataFrame(columns=columns)
         df.to_excel(filepath, index=False)
         autofilter_and_autofit(filepath)

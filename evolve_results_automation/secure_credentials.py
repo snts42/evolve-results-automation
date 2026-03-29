@@ -1,10 +1,10 @@
 import json
 import os
+import logging
 import base64
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-from .logging_utils import log
 
 
 class SecureCredentialManager:
@@ -102,16 +102,16 @@ class SecureCredentialManager:
             
             # Check if anything was actually removed
             if len(filtered) == initial_count:
-                log(f"Credential for username '{username}' not found.")
+                logging.info(f"Credential for username '{username}' not found.")
                 return False
             
             # Save the updated credentials
             self._save_credentials(filtered, master_password)
-            log(f"Credential for '{username}' removed.")
+            logging.info(f"Credential for '{username}' removed.")
             return True
             
         except Exception as e:
-            log(f"Error removing credential: {e}")
+            logging.info(f"Error removing credential: {e}")
             return False
 
     def add_credential(self, username: str, password: str, master_password: str) -> bool:
@@ -138,17 +138,17 @@ class SecureCredentialManager:
             
             # Check for duplicate username
             if any(cred.get('username') == username for cred in credentials):
-                log(f"Credential for username '{username}' already exists.")
+                logging.info(f"Credential for username '{username}' already exists.")
                 return False
                 
             # Add new credential and save
             credentials.append({'username': username, 'password': password})
             self._save_credentials(credentials, master_password)
-            log(f"Credential for '{username}' added.")
+            logging.info(f"Credential for '{username}' added.")
             return True
             
         except Exception as e:
-            log(f"Error adding credential: {e}")
+            logging.info(f"Error adding credential: {e}")
             return False
             
     def _save_credentials(self, credentials: list, master_password: str) -> None:
@@ -178,7 +178,7 @@ class SecureCredentialManager:
             credentials = self.decrypt_credentials(master_password)
             return credentials
         except Exception as e:
-            log(f"Error listing credentials: {e}")
+            logging.info(f"Error listing credentials: {e}")
             return []
 
 

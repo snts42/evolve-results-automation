@@ -27,6 +27,3 @@ def setup_logger():
     console_handler.setFormatter(ColourFormatter("%(asctime)s | %(message)s", "%Y-%m-%d %H:%M:%S"))
 
     logging.basicConfig(level=logging.INFO, handlers=[file_handler, console_handler])
-
-def log(msg: str):
-    logging.info(msg)

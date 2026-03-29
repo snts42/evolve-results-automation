@@ -7,6 +7,13 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from .parsing_utils import unique_row_hash
+
+ROW_XPATH = (
+    "//div[contains(@class, 'dx-datagrid-rowsview')]"
+    "//table[contains(@class, 'dx-datagrid-table')]"
+    "/tbody/tr[contains(@class, 'dx-row') and not(contains(@class, 'dx-freespace-row'))]"
+)
 
 def start_driver(headless=True):   
     chrome_options = Options()
@@ -60,11 +67,6 @@ def switch_to_results_iframe(driver, timeout=15):
     driver.switch_to.frame(iframe)
     logging.info("Switched to Results iframe.")
 
-def switch_to_default(driver):
-    driver.switch_to.default_content()
-    time.sleep(1)
-    logging.info("Switched back to default content.")
-
 def reset_and_refresh(driver):
     refresh_btn = safe_find(driver, By.XPATH, "//i[contains(@class,'dx-icon-refresh')]")
     refresh_btn.click()
@@ -73,12 +75,7 @@ def reset_and_refresh(driver):
 
 def parse_results_table(driver, existing_hashes, col_map):
     time.sleep(5)
-    row_xpath = (
-        "//div[contains(@class, 'dx-datagrid-rowsview')]"
-        "//table[contains(@class, 'dx-datagrid-table')]"
-        "/tbody/tr[contains(@class, 'dx-row') and not(contains(@class, 'dx-freespace-row'))]"
-    )
-    rows = driver.find_elements(By.XPATH, row_xpath)
+    rows = driver.find_elements(By.XPATH, ROW_XPATH)
     all_rows = []
     real_rows = 0
     for idx, row in enumerate(rows):
@@ -109,9 +106,7 @@ def parse_results_table(driver, existing_hashes, col_map):
             col_map.get("Certificate By", "Certificate By"): "",
             col_map.get("Comments", "Comments"): ""
         }
-        h = "|".join([str(data.get(f, "")).strip().lower() for f in [
-            "Candidate ref.", "First name", "Last name", "Completed", "Test Name", "Result"
-        ]])
+        h = unique_row_hash(data)
         if h in existing_hashes:
             continue
         all_rows.append(data)
@@ -121,12 +116,7 @@ def parse_results_table(driver, existing_hashes, col_map):
 
 def select_table_row(driver, row):
     time.sleep(4)
-    row_xpath = (
-        "//div[contains(@class, 'dx-datagrid-rowsview')]"
-        "//table[contains(@class, 'dx-datagrid-table')]"
-        "/tbody/tr[contains(@class, 'dx-row') and not(contains(@class, 'dx-freespace-row'))]"
-    )
-    table_rows = driver.find_elements(By.XPATH, row_xpath)
+    table_rows = driver.find_elements(By.XPATH, ROW_XPATH)
     for tr in table_rows:
         tds = tr.find_elements(By.TAG_NAME, "td")
         if not tds or len(tds) < 12:
