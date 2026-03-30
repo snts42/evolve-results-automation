@@ -17,11 +17,15 @@ dist/
 # Logs
 *.log
 
-# Local data not for repo
-backups/
+# Year-based data folders (Excel results, PDF reports, logs per year)
+# Matches any 4-digit year folder like 2024/, 2025/, 2026/ etc.
+evolve_results_automation/[0-9][0-9][0-9][0-9]/
+
+# Legacy flat-structure data (pre year-based restructuring)
 reports/
 logs/
 exam_results.xlsx
+backups/
 
 # Internal docs
 INSTRUCTIONS.TXT

@@ -37,13 +37,11 @@ def safe_find(driver, by, value, timeout=15):
     try:
         return WebDriverWait(driver, timeout).until(EC.presence_of_element_located((by, value)))
     except Exception:
-        with open("debug_failed_to_find_element.html", "w", encoding="utf-8") as f:
-            f.write(driver.page_source)
         raise Exception(f"Element not found (timeout): {value}")
 
 def login(driver, username: str, password: str):
     driver.get("https://evolve.cityandguilds.com/Login")
-    time.sleep(3)
+    time.sleep(4)
     user_box = safe_find(driver, By.ID, "UserName")
     pass_box = safe_find(driver, By.ID, "Password")
     user_box.clear()
@@ -53,12 +51,11 @@ def login(driver, username: str, password: str):
     login_btn = safe_find(driver, By.XPATH, "//input[@type='submit' and @value='Login']")
     login_btn.click()
     logging.info("Login submitted. Wait for dashboard to load...")
+    time.sleep(8)  # Wait for dashboard to fully load after login
 
 def goto_results_tab(driver):
-    driver.get("https://evolve.cityandguilds.com/#TestAdministration")
-    time.sleep(4)
-    results_tab = safe_find(driver, By.XPATH, "//a[@href='#TestAdministration/Results']")
-    results_tab.click()
+    driver.get("https://evolve.cityandguilds.com/#TestAdministration/Results")
+    time.sleep(6)  # Wait for Results page to load
     logging.info("Results tab opened. Please check Results table visible.")
 
 def switch_to_results_iframe(driver, timeout=15):
@@ -115,7 +112,6 @@ def parse_results_table(driver, existing_hashes, col_map):
     return all_rows
 
 def select_table_row(driver, row):
-    time.sleep(4)
     table_rows = driver.find_elements(By.XPATH, ROW_XPATH)
     for tr in table_rows:
         tds = tr.find_elements(By.TAG_NAME, "td")
@@ -131,10 +127,10 @@ def select_table_row(driver, row):
         if matches:
             driver.execute_script("arguments[0].scrollIntoView(true);", tr)
             tr.click()
-            time.sleep(4)
+            time.sleep(2)  # Wait after clicking row
             logging.info(f"Selected row in table: {row['First name']} {row['Last name']} ({row['Test Name']})")
             return True
-    logging.info("Could not find table row to select!")
+    # Row not found - return immediately without logging (too noisy)
     return False
 
 def click_candidate_report_button(driver):
@@ -143,3 +139,40 @@ def click_candidate_report_button(driver):
     logging.info("Clicked Candidate Report button.")
     time.sleep(2)
     return True
+
+def get_total_pages(driver):
+    """Get total number of pages from pagination control."""
+    try:
+        pages_count = driver.find_element(By.CLASS_NAME, "dx-pages-count")
+        total = int(pages_count.text)
+        return total
+    except Exception:
+        return 1  # Only 1 page if pagination not found
+
+def click_next_page(driver):
+    """Click the Next button to go to next page. Returns True if successful, False if already on last page."""
+    try:
+        next_btn = driver.find_element(By.CSS_SELECTOR, ".dx-navigate-button.dx-next-button")
+        
+        # Check if disabled
+        if "dx-button-disable" in next_btn.get_attribute("class"):
+            return False  # Already on last page
+        
+        next_btn.click()
+        time.sleep(4)  # Wait for page to load
+        return True
+    except Exception as e:
+        logging.warning(f"Failed to click next page: {e}")
+        return False
+
+def goto_page(driver, page_number):
+    """Navigate to a specific page number."""
+    if page_number == 1:
+        reset_and_refresh(driver)  # This goes to page 1
+    else:
+        reset_and_refresh(driver)  # Start from page 1
+        for _ in range(page_number - 1):
+            if not click_next_page(driver):
+                logging.warning(f"Failed to navigate to page {page_number}")
+                break
+    logging.info(f"Navigated to page {page_number}")

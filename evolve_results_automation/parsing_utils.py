@@ -2,14 +2,15 @@ import os
 import re
 from datetime import datetime
 
-from .config import REPORTS_BASE
+from .config import get_reports_base_for_year
 
 def make_report_folder_path(date_str: str) -> str:
-    """Create a dated folder path for reports."""
+    """Create a dated folder path for reports based on exam completion date."""
     dt = datetime.strptime(date_str, "%d/%m/%Y")
-    year = dt.strftime("%Y")
+    year = dt.year
     month_day = dt.strftime("%m %d")
-    folder = os.path.join(REPORTS_BASE, year, month_day)
+    reports_base = get_reports_base_for_year(year)
+    folder = os.path.join(reports_base, month_day)
     os.makedirs(folder, exist_ok=True)
     return folder
 
