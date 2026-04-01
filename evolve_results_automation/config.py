@@ -2,7 +2,13 @@ import os
 import sys
 from datetime import datetime
 
-BASE_DIR = os.path.dirname(os.path.abspath(sys.argv[0]))
+if getattr(sys, 'frozen', False):
+    # Running as a PyInstaller bundled .exe — use the exe's directory
+    BASE_DIR = os.path.dirname(sys.executable)
+else:
+    # Running as a Python module (python -m evolve_results_automation)
+    # __file__ is .../evolve_results_automation/config.py, so go up two levels
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Year-based organization (by exam completion date)
 def get_year_folder(year):
@@ -27,22 +33,21 @@ def get_logs_base_for_year(year):
     return os.path.join(year_folder, "logs")
 
 COLUMNS = [
-    "Candidate ref.", "First name", "Last name", "Completed",
-    "Test Name", "Result", "Percent", "Duration", "Centre Name",
-    "Report URL", "Report Download", "Result Sent", "Result Sent By",
-    "E-Certificate", "E-Certificate By", "Certificate", "Certificate By",
-    "Comments", "Keycode", "Subject", "PDF Direct Link"
+    # Core data (left)
+    "Enrolment no.", "First name", "Last name", "Completed",
+    "Test Name", "Result", "Centre Name",
+    # Admin fills in (middle)
+    "Result Sent", "Result Sent By",
+    "E-Certificate sent", "E-Certificate By",
+    "Certificate", "Certificate By",
+    # Technical/auto (right)
+    "Percent", "Duration", "Comments",
+    "Scraping date/time", "PDF report downloaded",
+    "Keycode", "Subject"
 ]
 
 # Credentials stay at root level (shared across years)
 ENCRYPTED_CREDENTIALS_FILE = os.path.join(BASE_DIR, "credentials.enc")
-
-# Default paths (use current year for logs)
-CURRENT_YEAR = datetime.now().year
-LOGS_BASE = get_logs_base_for_year(CURRENT_YEAR)
-
-# Excel and reports are determined dynamically based on exam date
-# Use get_excel_file_for_year(year) and get_reports_base_for_year(year)
 
 def current_log_path():
     """Get log path for current run (uses current date's year)."""

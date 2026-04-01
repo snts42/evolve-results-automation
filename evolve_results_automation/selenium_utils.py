@@ -36,8 +36,8 @@ def start_driver(headless=True):
 def safe_find(driver, by, value, timeout=15):
     try:
         return WebDriverWait(driver, timeout).until(EC.presence_of_element_located((by, value)))
-    except Exception:
-        raise Exception(f"Element not found (timeout): {value}")
+    except Exception as e:
+        raise Exception(f"Element not found (timeout): {value}") from e
 
 def login(driver, username: str, password: str):
     driver.get("https://evolve.cityandguilds.com/Login")
@@ -82,7 +82,7 @@ def parse_results_table(driver, existing_hashes, col_map):
         real_rows += 1
         data = {
             col_map.get("Keycode", "Keycode"): cells[1].text.strip(),
-            col_map.get("Candidate ref.", "Candidate ref."): cells[2].text.strip(),
+            col_map.get("Enrolment no.", "Enrolment no."): cells[2].text.strip(),
             col_map.get("First name", "First name"): cells[3].text.strip(),
             col_map.get("Last name", "Last name"): cells[4].text.strip(),
             col_map.get("Completed", "Completed"): cells[5].text.strip(),
@@ -92,12 +92,11 @@ def parse_results_table(driver, existing_hashes, col_map):
             col_map.get("Percent", "Percent"): cells[9].text.strip(),
             col_map.get("Duration", "Duration"): cells[10].text.strip(),
             col_map.get("Centre Name", "Centre Name"): cells[11].text.strip(),
-            col_map.get("Report URL", "Report URL"): datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            col_map.get("Report Download", "Report Download"): "",
-            col_map.get("PDF Direct Link", "PDF Direct Link"): "",
+            col_map.get("Scraping date/time", "Scraping date/time"): datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            col_map.get("PDF report downloaded", "PDF report downloaded"): "",
             col_map.get("Result Sent", "Result Sent"): "",
             col_map.get("Result Sent By", "Result Sent By"): "",
-            col_map.get("E-Certificate", "E-Certificate"): "",
+            col_map.get("E-Certificate sent", "E-Certificate sent"): "",
             col_map.get("E-Certificate By", "E-Certificate By"): "",
             col_map.get("Certificate", "Certificate"): "",
             col_map.get("Certificate By", "Certificate By"): "",
@@ -120,7 +119,7 @@ def select_table_row(driver, row):
         matches = all(
             tds[idx].text.strip() == str(row[col]).strip()
             for col, idx in [
-                ("Candidate ref.", 2), ("First name", 3), ("Last name", 4),
+                ("Enrolment no.", 2), ("First name", 3), ("Last name", 4),
                 ("Completed", 5), ("Test Name", 7), ("Result", 8)
             ]
         )
@@ -164,15 +163,3 @@ def click_next_page(driver):
     except Exception as e:
         logging.warning(f"Failed to click next page: {e}")
         return False
-
-def goto_page(driver, page_number):
-    """Navigate to a specific page number."""
-    if page_number == 1:
-        reset_and_refresh(driver)  # This goes to page 1
-    else:
-        reset_and_refresh(driver)  # Start from page 1
-        for _ in range(page_number - 1):
-            if not click_next_page(driver):
-                logging.warning(f"Failed to navigate to page {page_number}")
-                break
-    logging.info(f"Navigated to page {page_number}")

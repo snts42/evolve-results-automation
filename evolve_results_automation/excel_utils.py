@@ -16,7 +16,7 @@ def load_existing_results(filepath: str):
     return pd.read_excel(filepath, dtype=str)
 
 def save_results(filepath: str, df: pd.DataFrame):
-    date_cols_ddmmyyyy = ["Result Sent", "Certificate", "E-Certificate"]
+    date_cols_ddmmyyyy = ["Result Sent", "Certificate", "E-Certificate sent"]
     for col in date_cols_ddmmyyyy:
         if col in df.columns:
             df[col] = df[col].apply(lambda x: format_ddmmyyyy(x))

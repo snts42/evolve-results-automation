@@ -35,6 +35,14 @@ class SecureCredentialManager:
         )
         return base64.urlsafe_b64encode(kdf.derive(password.encode()))
     
+    def create_empty(self, master_password: str) -> None:
+        """Create an empty encrypted credentials file with the given master password.
+        
+        Args:
+            master_password: The master password for encryption
+        """
+        self._save_credentials([], master_password)
+
     def decrypt_credentials(self, master_password: str) -> list:
         """Decrypt and return credentials from the encrypted file.
         
@@ -111,7 +119,7 @@ class SecureCredentialManager:
             return True
             
         except Exception as e:
-            logging.info(f"Error removing credential: {e}")
+            logging.error(f"Error removing credential: {e}")
             return False
 
     def add_credential(self, username: str, password: str, master_password: str) -> bool:
@@ -148,7 +156,7 @@ class SecureCredentialManager:
             return True
             
         except Exception as e:
-            logging.info(f"Error adding credential: {e}")
+            logging.error(f"Error adding credential: {e}")
             return False
             
     def _save_credentials(self, credentials: list, master_password: str) -> None:
@@ -173,25 +181,10 @@ class SecureCredentialManager:
             f.write(salt + encrypted_data)
 
     def list_credentials(self, master_password: str = None) -> list:
-        """Get all usernames from encrypted file. Returns list of credentials or empty list on error."""
+        """Get all usernames from encrypted file. Returns list of usernames or empty list on error."""
         try:
             credentials = self.decrypt_credentials(master_password)
-            return credentials
+            return [{"username": cred.get("username", "?")} for cred in credentials]
         except Exception as e:
-            logging.info(f"Error listing credentials: {e}")
+            logging.error(f"Error listing credentials: {e}")
             return []
-
-
-def load_secure_credentials(credentials_file: str, master_password: str = None) -> list:
-    """
-    Load credentials securely. Supports both encrypted and plain text files.
-    
-    Args:
-        credentials_file: Path to credentials file
-        master_password: Master password for encrypted files (will prompt if not provided)
-    
-    Returns:
-        List of credential dictionaries
-    """
-    manager = SecureCredentialManager(credentials_file)
-    return manager.decrypt_credentials(master_password)

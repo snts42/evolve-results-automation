@@ -29,7 +29,7 @@ def report_filename(row):
 def unique_row_hash(row):
     """Generate a unique hash for a result row for deduplication."""
     fields = [
-        "Candidate ref.", "First name", "Last name", "Completed", "Test Name", "Result"
+        "Enrolment no.", "First name", "Last name", "Completed", "Test Name", "Result"
     ]
     return "|".join([str(row.get(f, "")).strip().lower() for f in fields])
 
@@ -43,8 +43,8 @@ def extract_pdf_filename_from_html(html):
 def get_column_map():
     """Return the column mapping dictionary for renaming columns."""
     return {
-        "Downloaded At": "Report URL",
-        "Report Downloaded At": "Report Download",
-        "E-Certificate Sent": "E-Certificate",
+        "Downloaded At": "Scraping date/time",
+        "Report Downloaded At": "PDF report downloaded",
+        "E-Certificate Sent": "E-Certificate sent",
         "Certificate Issued": "Certificate"
     }

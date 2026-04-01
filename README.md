@@ -17,14 +17,15 @@
 - Downloads all candidate reports as PDFs into a structured folder by date
 - Supports multiple Evolve accounts (multi-credential access)
 - Robust error handling and logging
-- Encrypted credential management  via CLI or GUI menu
+- Encrypted credential management via a modern desktop GUI (CustomTkinter)
 
 ## Quick Start (.exe Users)
 
-1. Download the latest `.exe` from [Releases](https://github.com/snts42/evolve-results-automation/releases/) 
-2. Run the `.exe` and follow the prompts to set a master password and add your Evolve credentials
-3. Start the automation from the menu
-4. Results will be saved to `exam_results.xlsx`, PDFs in `reports/YYYY/MM DD/`, and logs in `logs/YYYY/MM DD/`
+1. Download the latest `.exe` from [Releases](https://github.com/snts42/evolve-results-automation/releases/)
+2. Run the `.exe` — a desktop GUI will open
+3. Set a master password on first launch, then add your Evolve credentials in the **Accounts** tab
+4. Click **Start Automation** from the **Dashboard** tab
+5. Results are saved to `YYYY/exam_results.xlsx`, PDFs to `YYYY/reports/MM DD/`, logs to `YYYY/logs/MM DD/`
 
 > **Note:** ChromeDriver is managed automatically. Just make sure Google Chrome is installed.
 
@@ -40,7 +41,7 @@
    ```
 3. Run:
    ```bash
-   python -m evolve_results_automation.main
+   python -m evolve_results_automation
    ```
 
 ## Dependencies
@@ -50,8 +51,10 @@
 - pandas >= 2.3.0
 - requests >= 2.32.3
 - openpyxl >= 3.1.5
-- colorama >= 0.4.6
 - cryptography >= 45.0.5
+- customtkinter >= 5.2.2
+- Pillow >= 10.0.0
+- colorama >= 0.4.6
 
 ## Security & Credential Management
 
@@ -71,8 +74,9 @@ If you encounter issues starting Chrome, ensure:
 
 ## Versioning & Release Notes
 
-- **Current release:** v0.2.1
-- Encrypted credentials, `.exe` support, automatic ChromeDriver management
+- **Current release:** v1.0.0
+- Modern desktop GUI (CustomTkinter), encrypted credentials, `.exe` support, automatic ChromeDriver management
+- Year-based folder organisation for Excel results, PDF reports, and logs
 - All previous `.py` scripts and plaintext credential logic are obsolete
 
 ## License
