@@ -1,15 +1,17 @@
 """
-E-volve SecureAssess Results Automation - GUI
-Light mode, City & Guilds brand colours, maximised window.
+E-volve SecureAssess Automation - GUI
+Single-page layout, light mode, City & Guilds brand colours.
 Built by Alex Santonastaso (snts42)
 """
 
 import os
 import re
 import glob
+import json
 import threading
 import queue
 import webbrowser
+from datetime import datetime
 import customtkinter as ctk
 from tkinter import messagebox
 
@@ -21,8 +23,7 @@ from .secure_credentials import SecureCredentialManager
 # CONSTANTS
 # =============================================================================
 
-APP_TITLE    = "E-volve SecureAssess"
-APP_SUBTITLE = "Results Automation"
+APP_TITLE    = "E-volve SecureAssess Automation"
 APP_VER      = "v1.0.0"
 AUTHOR       = "Alex Santonastaso"
 AUTHOR_HANDLE = "snts42"
@@ -33,26 +34,30 @@ KOFI_URL     = "https://ko-fi.com/alexsantonastaso"
 
 # -- City & Guilds light-mode palette -----------------------------------------
 # Primary brand red (City & Guilds official red)
-CG_RED       = "#e30613"
-CG_RED_HOVER = "#ff1a28"
-CG_RED_LIGHT = "#FFEBEE"
-CG_RED_MID   = "#EF5350"
+CG_RED         = "#e30613"
+CG_RED_HOVER   = "#ff1a28"
+CG_RED_LIGHT   = "#FFEBEE"
 
+# Surfaces
 BG        = "#F5F5F7"   # window background (light grey)
-SURFACE   = "#FFFFFF"   # card / panel surface
+SURFACE   = "#FFFFFF"   # card / panel / white
 ELEVATED  = "#EEEEEE"   # hover / input background
-BORDER    = "#DDDDDD"   # border
+BORDER    = "#DDDDDD"   # all borders
 
-TEXT      = "#1A1A2E"   # near-black
-TEXT_MID  = "#5C5C74"   # secondary text
-TEXT_DIM  = "#9999AA"   # placeholder / dim
+# Text
+TEXT      = "#1A1A2E"   # primary (near-black)
+TEXT_MID  = "#5C5C74"   # secondary
+TEXT_DIM  = "#9999AA"   # placeholder / disabled
 
-SUCCESS      = "#2E7D32"
-SUCCESS_BG   = "#E8F5E9"
-DANGER       = "#C62828"
-DANGER_BG    = "#FFEBEE"
-AMBER        = "#E65100"
-AMBER_BG     = "#FFF3E0"
+# Semantic colours
+SUCCESS        = "#2E7D32"
+SUCCESS_BG     = "#E8F5E9"
+DANGER         = "#C62828"
+DANGER_HOVER   = "#B71C1C"
+DANGER_BG      = "#FFEBEE"
+DANGER_LIGHT   = "#FFCDD2"
+AMBER          = "#E65100"
+AMBER_HOVER    = "#BF360C"
 
 # -- Spacing ------------------------------------------------------------------
 S2=2; S4=4; S6=6; S8=8; S10=10; S12=12; S16=16; S20=20; S24=24; S32=32
@@ -73,28 +78,8 @@ def _detect_font():
 FONT = _detect_font()
 MONO = "Cascadia Code"
 
-# -- Icon generation ----------------------------------------------------------
-def _generate_icon(path):
-    try:
-        from PIL import Image, ImageDraw
-        imgs = []
-        for sz in (16, 32, 48, 64):
-            img = Image.new("RGBA", (sz, sz), (0, 0, 0, 0))
-            d = ImageDraw.Draw(img)
-            m = max(sz // 16, 1)
-            d.rounded_rectangle([m, m, sz-m-1, sz-m-1], radius=max(sz//5,2),
-                                 fill=(227, 6, 19, 255), outline=(255, 26, 40, 200))
-            cx, cy = sz/2 + sz*0.03, sz/2
-            h, w = sz*0.44, sz*0.38
-            d.polygon([(cx-w/2, cy-h/2),(cx+w/2, cy),(cx-w/2, cy+h/2)],
-                      fill=(255, 255, 255, 230))
-            imgs.append(img)
-        imgs[0].save(path, format="ICO",
-                     sizes=[(16,16),(32,32),(48,48),(64,64)],
-                     append_images=imgs[1:])
-        return True
-    except Exception:
-        return False
+LAST_RUN_FILE = os.path.join(BASE_DIR, "last_run.json")
+ICO_PATH = os.path.join(os.path.dirname(__file__), "app.ico")
 
 
 # =============================================================================
@@ -102,7 +87,7 @@ def _generate_icon(path):
 # =============================================================================
 
 class EvolveGUI:
-    """Single-window GUI — light mode, City & Guilds red brand colours."""
+    """Single-page GUI - light mode, City & Guilds red brand colours."""
 
     _W = {
         "login":0.10,"navigate":0.08,"iframe":0.04,"refresh":0.03,
@@ -111,6 +96,15 @@ class EvolveGUI:
 
     # ------------------------------------------------------------------ init
     def __init__(self):
+        # Windows: per-monitor DPI awareness + custom app ID for taskbar icon
+        try:
+            import ctypes
+            ctypes.windll.shcore.SetProcessDpiAwareness(2)
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                "evolve.secureassess.automation.1.0")
+        except Exception:
+            pass
+
         ctk.set_appearance_mode("light")
         ctk.set_default_color_theme("blue")
 
@@ -119,8 +113,10 @@ class EvolveGUI:
         self.automation_thread = None
         self.log_queue      = queue.Queue()
         self._authenticated = False
-        self._active_tab    = None
+        self._read_only     = False
         self._log_handler   = None
+        self._settings_win  = None
+        self._help_win      = None
 
         self._total_accounts = 0
         self._done_accounts  = 0
@@ -129,19 +125,50 @@ class EvolveGUI:
         self._acct_cur_page  = 0
 
         self.root = ctk.CTk()
-        self.root.title(f"{APP_TITLE} – {APP_SUBTITLE}")
+        self.root.title(f"{APP_TITLE} - Unofficial Tool")
         self.root.configure(fg_color=BG)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
-        self.root.minsize(900, 620)
+        self.root.resizable(False, False)
 
-        ico = os.path.join(os.path.dirname(__file__), "app.ico")
-        if not os.path.exists(ico):
-            _generate_icon(ico)
-        if os.path.exists(ico):
+        self.show_browser = ctk.BooleanVar(value=False)
+
+        # Block CTk's after(200) default-icon override
+        if os.path.exists(ICO_PATH):
             try:
-                self.root.iconbitmap(ico)
+                self.root.iconbitmap(ICO_PATH)
             except Exception:
                 pass
+
+        # Apply high-res icon via Windows API (bypasses tkinter entirely)
+        self.root.update()
+        self._set_win32_icon()
+
+    def _set_win32_icon(self):
+        """Use Windows API to set correct-size icons for title bar + taskbar."""
+        if not os.path.exists(ICO_PATH):
+            return
+        try:
+            import ctypes
+            u32 = ctypes.windll.user32
+            ico = os.path.abspath(ICO_PATH)
+            LR_LOADFROMFILE = 0x00000010
+
+            # Query system metrics for correct icon sizes
+            big_sz  = u32.GetSystemMetrics(11)   # SM_CXICON  (32/48)
+            small_sz = u32.GetSystemMetrics(49)  # SM_CXSMICON (16/20)
+
+            hicon_big = u32.LoadImageW(
+                None, ico, 1, big_sz, big_sz, LR_LOADFROMFILE)
+            hicon_small = u32.LoadImageW(
+                None, ico, 1, small_sz, small_sz, LR_LOADFROMFILE)
+
+            hwnd = u32.GetParent(self.root.winfo_id())
+            if hicon_big:
+                u32.SendMessageW(hwnd, 0x0080, 1, hicon_big)    # ICON_BIG
+            if hicon_small:
+                u32.SendMessageW(hwnd, 0x0080, 0, hicon_small)  # ICON_SMALL
+        except Exception:
+            pass
 
     # ================================================================ helpers
     def _f(self, size=14, weight="normal"):
@@ -165,7 +192,7 @@ class EvolveGUI:
 
     def _btn_primary(self, parent, text, cmd, **kw):
         d = dict(text=text, command=cmd, fg_color=CG_RED,
-                 hover_color=CG_RED_HOVER, text_color="#FFFFFF",
+                 hover_color=CG_RED_HOVER, text_color=SURFACE,
                  corner_radius=8, height=40, font=self._f(13,"bold"),
                  border_width=0)
         d.update(kw)
@@ -181,11 +208,6 @@ class EvolveGUI:
 
     def _divider(self, parent):
         return ctk.CTkFrame(parent, height=1, fg_color=BORDER)
-
-    def _section_label(self, parent, text):
-        ctk.CTkLabel(parent, text=text, font=self._f(10,"bold"),
-                     text_color=TEXT_DIM, anchor="w"
-                     ).pack(fill="x", padx=S16, pady=(S12, S4))
 
     # ====================================================== LOCK SCREEN
     def _show_lock_screen(self):
@@ -206,14 +228,12 @@ class EvolveGUI:
         ctk.CTkFrame(inner, height=4, fg_color=CG_RED,
                      corner_radius=2).pack(fill="x", pady=(0, S20))
 
-        ctk.CTkLabel(inner, text=APP_TITLE,
+        ctk.CTkLabel(inner, text="E-volve SecureAssess",
                      font=self._f(22,"bold"), text_color=TEXT
                      ).pack(pady=(0, S4))
-        ctk.CTkLabel(inner, text=APP_SUBTITLE,
-                     font=self._f(13), text_color=TEXT_MID
-                     ).pack(pady=(0, S4))
-        ctk.CTkLabel(inner, text=f"Unofficial Tool  {APP_VER}",
-                     font=self._f(10), text_color=TEXT_DIM
+        ctk.CTkLabel(inner,
+                     text=f"Automation - Unofficial Tool {APP_VER}",
+                     font=self._f(12), text_color=TEXT_MID
                      ).pack(pady=(0, S20))
 
         is_setup = not os.path.exists(ENCRYPTED_CREDENTIALS_FILE)
@@ -277,6 +297,14 @@ class EvolveGUI:
                 command=self._show_reset_password
             ).pack(pady=(S4, 0))
 
+            ctk.CTkButton(
+                inner, text="View saved results only",
+                font=self._f(11), fg_color="transparent",
+                hover_color=ELEVATED, text_color=TEXT_MID,
+                border_width=0, height=24,
+                command=self._skip_to_read_only
+            ).pack(pady=(S4, 0))
+
     # -------------------------------------------------- reset password
     def _show_reset_password(self):
         self._lock.destroy()
@@ -287,20 +315,20 @@ class EvolveGUI:
         outer.place(relx=0.5, rely=0.46, anchor="center")
 
         card = ctk.CTkFrame(outer, fg_color=SURFACE, corner_radius=16,
-                            border_width=1, border_color=BORDER, width=460)
+                            border_width=1, border_color=BORDER, width=440)
         card.pack()
 
         inner = ctk.CTkFrame(card, fg_color="transparent")
         inner.pack(fill="x", padx=S32, pady=S32)
 
-        ctk.CTkFrame(inner, height=4, fg_color=DANGER,
+        ctk.CTkFrame(inner, height=4, fg_color=CG_RED,
                      corner_radius=2).pack(fill="x", pady=(0, S20))
         ctk.CTkLabel(inner, text="Reset Password",
-                     font=self._f(20,"bold"), text_color=TEXT
+                     font=self._f(22,"bold"), text_color=TEXT
                      ).pack(pady=(0, S12))
         ctk.CTkLabel(inner,
                      text="This deletes the encrypted credentials file and removes "
-                          "all saved E-volve login accounts. You will need to set a "
+                          "all saved E-volve SecureAssess login accounts. You will need to set a "
                           "new master password and re-add your accounts.",
                      font=self._f(12), text_color=TEXT_MID,
                      wraplength=380, justify="left").pack(pady=(0, S10))
@@ -337,189 +365,126 @@ class EvolveGUI:
         row = ctk.CTkFrame(inner, fg_color="transparent")
         row.pack(fill="x")
         self._btn_primary(row, "Reset Everything", do_reset,
-                          fg_color=DANGER, hover_color="#B71C1C"
+                          fg_color=DANGER, hover_color=DANGER_HOVER
                           ).pack(side="left", fill="x", expand=True, padx=(0, S8))
         self._btn_secondary(row, "Go Back",
                             lambda: (self._lock.destroy(), self._show_lock_screen())
                             ).pack(side="right", fill="x", expand=True, padx=(S8,0))
         confirm_entry.bind("<Return>", lambda _: do_reset())
 
+    # ------------------------------------------------------- return to lock
+    def _return_to_lock(self):
+        self._read_only = False
+        self._main.destroy()
+        self._show_lock_screen()
+
+    # ------------------------------------------------------- skip to read-only
+    def _skip_to_read_only(self):
+        self._read_only = True
+        self._lock.destroy()
+        self._build_main_ui()
+        self._log(f"{APP_TITLE}  {APP_VER}")
+        self._log("Read-only mode - unlock to run automation or manage accounts.\n")
+
     # ------------------------------------------------------- unlock
     def _unlock(self, first_time=False):
         self._authenticated = True
+        self._read_only = False
         self._lock.destroy()
         self._build_main_ui()
-        self.root.after(50, self._maximize)
         self._refresh_account_data()
-        self._log(f"{APP_TITLE} {APP_SUBTITLE}  {APP_VER}")
+        self._log(f"{APP_TITLE}  {APP_VER}")
         self._log("Ready.\n")
         if first_time:
-            self._log("First-time setup complete. Head to Accounts to add your E-volve login.\n")
-            self.root.after(300, lambda: self._switch_tab("accounts"))
+            self._log("First-time setup complete. Open Settings to add your E-volve SecureAssess login.\n")
 
     # ============================================================= MAIN UI
     def _build_main_ui(self):
         self._main = ctk.CTkFrame(self.root, fg_color=BG)
         self._main.pack(fill="both", expand=True)
 
-        self._build_tab_bar()
-        self._build_footer()
-
-        # content fills between tab bar and footer
-        self._content = ctk.CTkFrame(self._main, fg_color="transparent")
-        self._content.pack(fill="both", expand=True, padx=S12, pady=(S4, 0))
-
-        # toast slot (zero height when empty)
-        self._toast_slot = ctk.CTkFrame(self._content, fg_color="transparent")
-        self._toast_slot.pack(fill="x")
-
-        # --- tab frames: use pack/pack_forget (avoids place sizing issues) ---
-        self._tab_dashboard = ctk.CTkFrame(self._content, fg_color="transparent")
-        self._tab_accounts  = ctk.CTkFrame(self._content, fg_color="transparent")
-        self._tab_files     = ctk.CTkFrame(self._content, fg_color="transparent")
-        self._tab_help      = ctk.CTkFrame(self._content, fg_color="transparent")
-
-        self._build_dashboard()
-        self._build_accounts()
-        self._build_files()
-        self._build_help()
-
-        self._switch_tab("dashboard")
-
-    # ------------------------------------------------------- tab bar
-    def _build_tab_bar(self):
-        # Red accent line
-        ctk.CTkFrame(self._main, height=4, fg_color=CG_RED,
+        # Red accent stripe
+        ctk.CTkFrame(self._main, height=3, fg_color=CG_RED,
                      corner_radius=0).pack(fill="x")
 
-        bar = ctk.CTkFrame(self._main, fg_color=SURFACE,
-                           height=44, corner_radius=0)
-        bar.pack(fill="x")
-        bar.pack_propagate(False)
+        # Build footer first (packs at bottom)
+        self._build_footer()
 
-        inner = ctk.CTkFrame(bar, fg_color="transparent")
-        inner.pack(fill="both", padx=S16, pady=S4)
+        # Content area
+        content = ctk.CTkFrame(self._main, fg_color="transparent")
+        content.pack(fill="both", expand=True, padx=S12, pady=(S6, 0))
 
-        # Label on right
-        ctk.CTkLabel(inner,
-                     text=f"{APP_TITLE} {APP_SUBTITLE}  —  Unofficial Tool  {APP_VER}",
-                     font=self._f(11), text_color=TEXT_DIM
-                     ).pack(side="right")
+        self._build_controls(content)
+        self._build_quick_open(content)
+        self._build_activity_log(content)
 
-        self._tab_btns = {}
-        self._tab_indicators = {}
-
-        for name, label in [("dashboard","Dashboard"),("accounts","Accounts"),
-                             ("files","Files"),("help","Help")]:
-            col = ctk.CTkFrame(inner, fg_color="transparent")
-            col.pack(side="left", padx=(0, S4))
-
-            btn = ctk.CTkButton(
-                col, text=label, font=self._f(12),
-                fg_color="transparent", hover_color=CG_RED_LIGHT,
-                text_color=TEXT_MID, corner_radius=6,
-                height=28, width=90, border_width=0,
-                command=lambda n=name: self._switch_tab(n))
-            btn.pack()
-
-            ind = ctk.CTkFrame(col, height=2, fg_color="transparent",
-                               corner_radius=1)
-            ind.pack(fill="x")
-
-            self._tab_btns[name] = btn
-            self._tab_indicators[name] = ind
-
-        self._divider(self._main).pack(fill="x")
-
-    # ------------------------------------------------------- tab switch
-    def _switch_tab(self, name):
-        frames = {
-            "dashboard": self._tab_dashboard,
-            "accounts":  self._tab_accounts,
-            "files":     self._tab_files,
-            "help":      self._tab_help,
-        }
-        for f in frames.values():
-            f.pack_forget()
-
-        frames[name].pack(fill="both", expand=True)
-
-        for n, btn in self._tab_btns.items():
-            active = (n == name)
-            btn.configure(text_color=CG_RED if active else TEXT_MID,
-                          font=self._f(12, "bold" if active else "normal"))
-            self._tab_indicators[n].configure(
-                fg_color=CG_RED if active else "transparent")
-
-        self._active_tab = name
-        if name == "accounts":
-            self._refresh_accounts_list()
-        elif name == "files":
-            self._refresh_files_list()
-
-    # ------------------------------------------------------- footer
-    def _build_footer(self):
-        ft = ctk.CTkFrame(self._main, fg_color=SURFACE,
-                          height=40, corner_radius=0)
-        ft.pack(fill="x", side="bottom")
-        ft.pack_propagate(False)
-
-        self._divider(self._main).pack(fill="x", side="bottom")
-
-        inner = ctk.CTkFrame(ft, fg_color="transparent")
-        inner.pack(fill="both", padx=S16)
-
-        ctk.CTkLabel(inner, text=f"Made with ♥ by {AUTHOR}",
-                     font=self._f(12), text_color=TEXT_MID
-                     ).pack(side="left", pady=S6)
-
-        ctk.CTkButton(inner, text="Support on Ko-fi",
-                      font=self._f(12), fg_color="transparent",
-                      hover_color=ELEVATED, text_color=AMBER,
-                      border_width=0, height=28, width=130,
-                      command=lambda: webbrowser.open(KOFI_URL)
-                      ).pack(side="right", pady=S6, padx=(S8,0))
-
-        ctk.CTkButton(inner, text=f"github.com/{AUTHOR_HANDLE}",
-                      font=self._f(12), fg_color="transparent",
-                      hover_color=ELEVATED, text_color=TEXT_MID,
-                      border_width=0, height=28, width=140,
-                      command=lambda: webbrowser.open(GITHUB_URL)
-                      ).pack(side="right", pady=S6)
-
-    # ========================================================= DASHBOARD
-    def _build_dashboard(self):
-        f = self._tab_dashboard
-
-        # --- controls row ---
-        ctrl_card = self._card(f)
+    # ------------------------------------------------------- controls card
+    def _build_controls(self, parent):
+        ctrl_card = self._card(parent)
         ctrl_card.pack(fill="x", pady=(0, S6))
 
+        # Header row: AUTOMATION label + Settings / Help
+        hdr = ctk.CTkFrame(ctrl_card, fg_color="transparent")
+        hdr.pack(fill="x", padx=S16, pady=(S8, 0))
+
+        ctk.CTkLabel(hdr, text="AUTOMATION",
+                     font=self._f(10, "bold"), text_color=TEXT_DIM
+                     ).pack(side="left")
+
+        ctk.CTkButton(
+            hdr, text="Help", width=40, height=24, corner_radius=6,
+            font=self._f(11), fg_color="transparent",
+            hover_color=ELEVATED, text_color=TEXT_DIM, border_width=0,
+            command=self._open_help
+        ).pack(side="right", padx=(S4, 0))
+
+        self._settings_btn = ctk.CTkButton(
+            hdr, text="Settings", width=60, height=24, corner_radius=6,
+            font=self._f(11), fg_color="transparent",
+            hover_color=ELEVATED, text_color=TEXT_DIM, border_width=0,
+            command=self._open_settings
+        )
+        self._settings_btn.pack(side="right")
+
+        if self._read_only:
+            self._settings_btn.configure(state="disabled")
+            ctk.CTkButton(
+                hdr, text="Unlock", width=50, height=24, corner_radius=6,
+                font=self._f(11, "bold"), fg_color="transparent",
+                hover_color=CG_RED_LIGHT, text_color=CG_RED, border_width=0,
+                command=self._return_to_lock
+            ).pack(side="right", padx=(0, S4))
+
+        # Controls row: account selector + run button
         ctrl = ctk.CTkFrame(ctrl_card, fg_color="transparent")
         ctrl.pack(fill="x", padx=S16, pady=S10)
 
-        ctk.CTkLabel(ctrl, text="Account",
+        ctk.CTkLabel(ctrl, text="E-volve Account",
                      font=self._f(12), text_color=TEXT_MID
                      ).pack(side="left", padx=(0, S8))
 
         self.account_var = ctk.StringVar(value="All Accounts")
-        self.account_dd = ctk.CTkOptionMenu(
-            ctrl, variable=self.account_var,
-            values=["All Accounts"],
-            height=36, corner_radius=8, font=self._f(12), width=200,
-            fg_color=SURFACE, button_color=BORDER,
-            button_hover_color=ELEVATED, text_color=TEXT,
-            dropdown_fg_color=SURFACE, dropdown_hover_color=CG_RED_LIGHT,
-            dropdown_text_color=TEXT)
-        self.account_dd.pack(side="left", padx=(0, S16))
+        self._account_values = ["All Accounts"]
 
-        self.show_browser = ctk.BooleanVar(value=False)
-        ctk.CTkSwitch(
-            ctrl, text="Show browser", variable=self.show_browser,
-            font=self._f(12), text_color=TEXT_MID,
-            progress_color=CG_RED, button_color=SURFACE,
-            button_hover_color=ELEVATED, fg_color=BORDER
-        ).pack(side="left", padx=(0, S16))
+        # Custom dropdown trigger: frame with left text + right arrow
+        self._dd_frame = ctk.CTkFrame(
+            ctrl, fg_color=SURFACE, border_color=BORDER, border_width=1,
+            corner_radius=8, width=130, height=36)
+        self._dd_frame.pack(side="left", padx=(0, S16))
+        self._dd_frame.pack_propagate(False)
+
+        self._dd_text = ctk.CTkLabel(
+            self._dd_frame, textvariable=self.account_var,
+            font=self._f(12), text_color=TEXT, anchor="w")
+        self._dd_text.pack(side="left", fill="x", expand=True, padx=(S8, 0))
+
+        self._dd_arrow = ctk.CTkLabel(
+            self._dd_frame, text="\u25BE", font=self._f(12),
+            text_color=TEXT_DIM, width=24)
+        self._dd_arrow.pack(side="right", padx=(0, S4))
+
+        for w in (self._dd_frame, self._dd_text, self._dd_arrow):
+            w.bind("<Button-1>", lambda e: self._show_account_menu())
 
         self.cred_lbl = ctk.CTkLabel(ctrl, text="",
                                      font=self._f(11), text_color=TEXT_DIM)
@@ -527,41 +492,84 @@ class EvolveGUI:
 
         self.run_btn = self._btn_primary(
             ctrl, "Run Automation", self._run_automation,
-            height=36, width=140)
+            height=36, width=160)
         self.run_btn.pack(side="right")
 
-        # --- progress row ---
-        prog_card = self._card(f)
-        prog_card.pack(fill="x", pady=(0, S6))
+        if self._read_only:
+            self.run_btn.configure(state="disabled", fg_color=ELEVATED,
+                                   text_color=TEXT_DIM)
+            self._dd_frame.configure(fg_color=ELEVATED)
+            for w in (self._dd_frame, self._dd_text, self._dd_arrow):
+                w.unbind("<Button-1>")
 
-        prog = ctk.CTkFrame(prog_card, fg_color="transparent")
-        prog.pack(fill="x", padx=S16, pady=S10)
-
-        top_row = ctk.CTkFrame(prog, fg_color="transparent")
-        top_row.pack(fill="x", pady=(0, S6))
+        # Status + progress section - always packed (reserves space),
+        # but starts invisible (colours match background). Revealed by
+        # _show_progress_section() when automation starts.
+        self._prog_frame = ctk.CTkFrame(ctrl_card, fg_color="transparent",
+                                         height=50)
+        self._prog_frame.pack(fill="x", padx=S16, pady=(0, S6))
+        self._prog_frame.pack_propagate(False)
 
         self.status_lbl = ctk.CTkLabel(
-            top_row, text="Ready", font=self._f(12),
-            text_color=TEXT_MID, anchor="w")
-        self.status_lbl.pack(side="left", fill="x", expand=True)
+            self._prog_frame, text="", font=self._f(12),
+            text_color=BG, anchor="w")
+        self.status_lbl.pack(fill="x", pady=(0, S4))
 
         self.progress_bar = ctk.CTkProgressBar(
-            prog, height=8, corner_radius=4,
-            fg_color=ELEVATED, progress_color=CG_RED)
+            self._prog_frame, height=8, corner_radius=4,
+            fg_color=BG, progress_color=BG)
         self.progress_bar.pack(fill="x")
         self.progress_bar.set(0)
+        self._prog_shown = False
 
-        # --- banner slot ---
-        self._banner_slot = ctk.CTkFrame(f, fg_color="transparent")
-        self._banner_slot.pack(fill="x")
+        if self._read_only:
+            self.status_lbl.configure(
+                text="Read-only mode - unlock to run automation",
+                text_color=TEXT_MID)
+            self.progress_bar.configure(fg_color=ELEVATED, progress_color=CG_RED)
+            self._prog_shown = True
 
-        # --- activity log (fills remaining space) ---
-        log_card = self._card(f)
+        # Last run label (in ctrl_card, independent of progress bar)
+        self._results_lbl = ctk.CTkLabel(
+            ctrl_card, text="", font=self._f(11),
+            text_color=TEXT_DIM, anchor="w")
+
+        self._load_last_run()
+
+    # ------------------------------------------------------- quick open card
+    def _build_quick_open(self, parent):
+        qo_card = self._card(parent)
+        qo_card.pack(fill="x", pady=(0, S6))
+
+        inner = ctk.CTkFrame(qo_card, fg_color="transparent")
+        inner.pack(fill="x", padx=S16, pady=S10)
+
+        ctk.CTkLabel(inner, text="QUICK OPEN",
+                     font=self._f(10, "bold"), text_color=TEXT_DIM,
+                     anchor="w").pack(anchor="w", pady=(0, S4))
+
+        btn_row = ctk.CTkFrame(inner, fg_color="transparent")
+        btn_row.pack(fill="x")
+
+        self._excel_btn = self._btn_primary(btn_row, "Excel",
+                          self._open_current_excel,
+                          height=32, width=80)
+        self._excel_btn.pack(side="left", padx=(0, S8))
+        self._btn_secondary(btn_row, "Reports",
+                            lambda: self._open_current_folder("reports"),
+                            height=32, width=80).pack(side="left", padx=(0, S8))
+        self._btn_secondary(btn_row, "Logs",
+                            lambda: self._open_current_folder("logs"),
+                            height=32, width=80).pack(side="left")
+
+    # ------------------------------------------------------- activity log
+    def _build_activity_log(self, parent):
+        log_card = self._card(parent)
         log_card.pack(fill="both", expand=True, pady=(0, S6))
 
         lh = ctk.CTkFrame(log_card, fg_color="transparent")
         lh.pack(fill="x", padx=S16, pady=(S8, S4))
-        ctk.CTkLabel(lh, text="ACTIVITY LOG",
+        ctk.CTkLabel(lh, text="AUTOMATION LOGS",
                      font=self._f(10,"bold"),
                      text_color=TEXT_DIM).pack(side="left")
 
@@ -571,104 +579,178 @@ class EvolveGUI:
             fg_color=BG, text_color=TEXT, border_width=0)
         self.log_text.pack(fill="both", expand=True, padx=S8, pady=(0, S8))
 
-    # ========================================================= ACCOUNTS
-    def _build_accounts(self):
-        f = self._tab_accounts
+    # ------------------------------------------------------- footer
+    def _build_footer(self):
+        self._divider(self._main).pack(fill="x", side="bottom")
 
-        hdr = ctk.CTkFrame(f, fg_color="transparent")
-        hdr.pack(fill="x", pady=(0, S6))
-        ctk.CTkLabel(hdr, text="Manage Accounts",
-                     font=self._f(18,"bold"), text_color=TEXT,
-                     anchor="w").pack(anchor="w")
-        ctk.CTkLabel(hdr,
-                     text="E-volve SecureAssess login credentials — AES-256 encrypted locally.",
-                     font=self._f(12), text_color=TEXT_MID,
-                     anchor="w").pack(anchor="w")
+        ft = ctk.CTkFrame(self._main, fg_color=SURFACE,
+                          height=26, corner_radius=0)
+        ft.pack(fill="x", side="bottom")
+        ft.pack_propagate(False)
 
-        # add form
-        add_card = self._card(f)
-        add_card.pack(fill="x", pady=(0, S6))
+        inner = ctk.CTkFrame(ft, fg_color="transparent")
+        inner.pack(fill="both", padx=S12)
 
-        add_inner = ctk.CTkFrame(add_card, fg_color="transparent")
-        add_inner.pack(fill="x", padx=S16, pady=S12)
+        ctk.CTkLabel(inner,
+                     text=f"{APP_VER}  \u2022  Made with \u2665 by {AUTHOR}",
+                     font=self._f(10), text_color=TEXT_DIM
+                     ).pack(side="left", pady=S2)
 
-        ctk.CTkLabel(add_inner, text="ADD NEW ACCOUNT",
-                     font=self._f(10,"bold"), text_color=TEXT_DIM, anchor="w"
-                     ).pack(anchor="w", pady=(0, S8))
+        ctk.CTkButton(inner, text="Support the developer",
+                      font=self._f(10), fg_color="transparent",
+                      hover_color=ELEVATED, text_color=AMBER,
+                      border_width=0, height=20, width=130,
+                      command=lambda: webbrowser.open(KOFI_URL)
+                      ).pack(side="right", pady=S2)
 
-        form = ctk.CTkFrame(add_inner, fg_color="transparent")
-        form.pack(fill="x")
-        self._acc_user = self._entry(form, placeholder_text="Username")
-        self._acc_user.pack(side="left", fill="x", expand=True, padx=(0, S8))
-        self._acc_pass = self._entry(form, placeholder_text="Password", show="*")
-        self._acc_pass.pack(side="left", fill="x", expand=True, padx=(0, S8))
-        self._btn_primary(form, "Add", self._add_account,
-                          height=40, width=90).pack(side="right")
+        ctk.CTkButton(inner, text="GitHub",
+                      font=self._f(10), fg_color="transparent",
+                      hover_color=ELEVATED, text_color=TEXT_DIM,
+                      border_width=0, height=20, width=50,
+                      command=lambda: webbrowser.open(REPO_URL)
+                      ).pack(side="right", pady=S2)
 
-        # saved accounts list
-        list_card = self._card(f)
-        list_card.pack(fill="both", expand=True, pady=(0, S6))
-
-        lh = ctk.CTkFrame(list_card, fg_color="transparent")
-        lh.pack(fill="x", padx=S16, pady=(S8, S4))
-        ctk.CTkLabel(lh, text="SAVED ACCOUNTS",
-                     font=self._f(10,"bold"), text_color=TEXT_DIM
-                     ).pack(side="left")
-
-        self._acc_scroll = ctk.CTkScrollableFrame(
-            list_card, fg_color="transparent", corner_radius=0)
-        self._acc_scroll.pack(fill="both", expand=True, padx=S8, pady=(0, S8))
-
-    def _refresh_account_data(self):
-        if not os.path.exists(ENCRYPTED_CREDENTIALS_FILE):
-            self.cred_lbl.configure(text="No accounts")
-            self.account_dd.configure(values=["All Accounts"])
-            self.account_var.set("All Accounts")
+    # ========================================================= SETTINGS DIALOG
+    def _open_settings(self):
+        if self._settings_win and self._settings_win.winfo_exists():
+            self._settings_win.focus()
             return
-        try:
-            creds = self.manager.list_credentials(master_password=self.master_password)
-            n = len(creds)
-            self.cred_lbl.configure(text=f"{n} account{'s' if n!=1 else ''}")
-            names = [c.get("username","?") for c in creds]
-            self.account_dd.configure(values=["All Accounts"] + names)
-        except Exception:
-            self.cred_lbl.configure(text="Error")
 
-    def _refresh_accounts_list(self):
-        for w in self._acc_scroll.winfo_children():
-            w.destroy()
-        try:
-            creds = self.manager.list_credentials(master_password=self.master_password)
-            if not creds:
-                ctk.CTkLabel(self._acc_scroll,
-                             text="No accounts saved yet. Add one above.",
-                             font=self._f(12), text_color=TEXT_DIM
-                             ).pack(pady=S20)
+        w, h = 440, 420
+        win = ctk.CTkToplevel(self.root)
+        win.title("Settings")
+        win.resizable(False, False)
+        win.configure(fg_color=BG)
+        win.transient(self.root)
+        win.grab_set()
+        self._settings_win = win
+        self._center_dialog(win, w, h)
+
+        if os.path.exists(ICO_PATH):
+            try:
+                win.after(200, lambda: win.iconbitmap(ICO_PATH))
+            except Exception:
+                pass
+
+        # Red accent stripe
+        ctk.CTkFrame(win, height=3, fg_color=CG_RED,
+                     corner_radius=0).pack(fill="x")
+
+        inner = ctk.CTkFrame(win, fg_color="transparent")
+        inner.pack(fill="both", expand=True, padx=S16, pady=S12)
+
+        # -- AUTOMATION SETTINGS (top) --
+        ctk.CTkLabel(inner, text="AUTOMATION SETTINGS",
+                     font=self._f(10, "bold"), text_color=TEXT_DIM,
+                     anchor="w").pack(anchor="w", pady=(0, S4))
+        ctk.CTkSwitch(
+            inner, text="Show browser during automation",
+            variable=self.show_browser,
+            font=self._f(12), text_color=TEXT_MID,
+            progress_color=CG_RED, button_color=SURFACE,
+            button_hover_color=ELEVATED, fg_color=BORDER
+        ).pack(anchor="w")
+
+        self._divider(inner).pack(fill="x", pady=(S10, S10))
+
+        # -- ADD CREDENTIAL --
+        ctk.CTkLabel(inner, text="ADD CREDENTIAL",
+                     font=self._f(10, "bold"), text_color=TEXT_DIM,
+                     anchor="w").pack(anchor="w", pady=(0, S2))
+        ctk.CTkLabel(inner,
+                     text="E-volve SecureAssess logins - AES-256 encrypted locally.",
+                     font=self._f(11), text_color=TEXT_MID,
+                     anchor="w", wraplength=400).pack(anchor="w", pady=(0, S8))
+
+        form = ctk.CTkFrame(inner, fg_color="transparent")
+        form.pack(fill="x", pady=(0, S4))
+        acc_user = self._entry(form, placeholder_text="Username")
+        acc_user.pack(side="left", fill="x", expand=True, padx=(0, S6))
+        acc_pass = self._entry(form, placeholder_text="Password", show="*")
+        acc_pass.pack(side="left", fill="x", expand=True, padx=(0, S6))
+        self._btn_primary(form, "Add", lambda: add_acct(),
+                          height=40, width=70).pack(side="right")
+
+        status_lbl = ctk.CTkLabel(inner, text="", font=self._f(11),
+                                  text_color=TEXT_DIM)
+        status_lbl.pack(anchor="w", pady=(0, S4))
+
+        # -- SAVED CREDENTIALS --
+        ctk.CTkLabel(inner, text="SAVED CREDENTIALS",
+                     font=self._f(10, "bold"), text_color=TEXT_DIM
+                     ).pack(anchor="w", pady=(0, S4))
+
+        acc_scroll = ctk.CTkFrame(inner, fg_color="transparent",
+                                   corner_radius=0)
+        acc_scroll.pack(fill="both", expand=True)
+
+        def refresh_list():
+            for w in acc_scroll.winfo_children():
+                w.destroy()
+            try:
+                creds = self.manager.list_credentials(
+                    master_password=self.master_password)
+                if not creds:
+                    ctk.CTkLabel(acc_scroll,
+                                 text="No accounts saved yet.",
+                                 font=self._f(12), text_color=TEXT_DIM
+                                 ).pack(pady=S16)
+                    return
+                for cred in creds:
+                    uname = cred.get("username", "?")
+                    row = ctk.CTkFrame(acc_scroll, fg_color=SURFACE,
+                                       corner_radius=8, height=44)
+                    row.pack(fill="x", pady=(0, S4))
+                    row.pack_propagate(False)
+                    ctk.CTkLabel(row, text=uname, font=self._f(12),
+                                 text_color=TEXT).pack(side="left", padx=S12)
+                    rbtn = ctk.CTkButton(
+                        row, text="Remove", width=72, height=28,
+                        corner_radius=8, font=self._f(10),
+                        fg_color=DANGER_BG, hover_color=DANGER_LIGHT,
+                        text_color=DANGER, border_color=DANGER,
+                        border_width=1)
+                    rbtn.pack(side="right", padx=S8)
+                    self._bind_settings_remove(uname, rbtn, refresh_list,
+                                               status_lbl)
+            except Exception as e:
+                ctk.CTkLabel(acc_scroll, text=f"Error: {e}",
+                             font=self._f(12), text_color=DANGER
+                             ).pack(pady=S12)
+
+        def add_acct():
+            u = acc_user.get().strip()
+            p = acc_pass.get().strip()
+            if not u or not p:
+                status_lbl.configure(text="Both fields required.",
+                                     text_color=DANGER)
                 return
-            for cred in creds:
-                uname = cred.get("username","?")
-                row = ctk.CTkFrame(self._acc_scroll, fg_color=BG,
-                                   corner_radius=8, height=48)
-                row.pack(fill="x", pady=(0, S4))
-                row.pack_propagate(False)
-                ctk.CTkLabel(row, text=uname, font=self._f(13), text_color=TEXT
-                             ).pack(side="left", padx=S16)
-                rbtn = ctk.CTkButton(
-                    row, text="Remove", width=80, height=32, corner_radius=8,
-                    font=self._f(11), fg_color=DANGER_BG, hover_color="#FFCDD2",
-                    text_color=DANGER, border_color=DANGER, border_width=1)
-                rbtn.pack(side="right", padx=S12)
-                self._bind_remove(uname, rbtn)
-        except Exception as e:
-            ctk.CTkLabel(self._acc_scroll, text=f"Error: {e}",
-                         font=self._f(12), text_color=DANGER).pack(pady=S16)
+            try:
+                ok = self.manager.add_credential(
+                    u, p, master_password=self.master_password)
+                if ok:
+                    acc_user.delete(0, "end")
+                    acc_pass.delete(0, "end")
+                    self._refresh_account_data()
+                    refresh_list()
+                    status_lbl.configure(text=f"Added '{u}'.",
+                                         text_color=SUCCESS)
+                else:
+                    status_lbl.configure(text=f"'{u}' already exists.",
+                                         text_color=DANGER)
+            except Exception as e:
+                status_lbl.configure(text=f"Error: {e}",
+                                     text_color=DANGER)
 
-    def _bind_remove(self, username, btn):
+        refresh_list()
+
+    def _bind_settings_remove(self, username, btn, refresh_fn, status_lbl):
         state = {"confirmed": False}
 
         def reset():
             if btn.winfo_exists():
-                btn.configure(text="Remove"); state["confirmed"] = False
+                btn.configure(text="Remove")
+                state["confirmed"] = False
 
         def on_click():
             if not state["confirmed"]:
@@ -677,226 +759,184 @@ class EvolveGUI:
                 self.root.after(3000, reset)
             else:
                 try:
-                    self.manager.remove_credential(username,
-                                                   master_password=self.master_password)
-                    self._refresh_accounts_list()
+                    self.manager.remove_credential(
+                        username, master_password=self.master_password)
                     self._refresh_account_data()
-                    self._toast(f"Account '{username}' removed", "info")
+                    refresh_fn()
+                    status_lbl.configure(
+                        text=f"Removed '{username}'.", text_color=SUCCESS)
                 except Exception as e:
-                    self._toast(f"Error: {e}", "error")
+                    status_lbl.configure(
+                        text=f"Error: {e}", text_color=DANGER)
 
         btn.configure(command=on_click)
 
-    def _add_account(self):
-        u = self._acc_user.get().strip()
-        p = self._acc_pass.get().strip()
-        if not u or not p:
-            self._toast("Both username and password are required.", "error"); return
-        try:
-            ok = self.manager.add_credential(u, p, master_password=self.master_password)
-            if ok:
-                self._acc_user.delete(0,"end")
-                self._acc_pass.delete(0,"end")
-                self._refresh_accounts_list()
-                self._refresh_account_data()
-                self._toast(f"Account '{u}' added.", "success")
-            else:
-                self._toast(f"Account '{u}' already exists.", "error")
-        except Exception as e:
-            self._toast(f"Error: {e}", "error")
-
-    # ========================================================= FILES
-    def _build_files(self):
-        f = self._tab_files
-
-        hdr = ctk.CTkFrame(f, fg_color="transparent")
-        hdr.pack(fill="x", pady=(0, S6))
-        ctk.CTkLabel(hdr, text="Files", font=self._f(18,"bold"),
-                     text_color=TEXT, anchor="w").pack(anchor="w")
-        ctk.CTkLabel(hdr, text="Open Excel reports, PDF folders, and log files.",
-                     font=self._f(12), text_color=TEXT_MID,
-                     anchor="w").pack(anchor="w")
-
-        self._files_scroll = ctk.CTkScrollableFrame(
-            f, fg_color="transparent", corner_radius=0)
-        self._files_scroll.pack(fill="both", expand=True, pady=(0, S6))
-
-    def _refresh_files_list(self):
-        for w in self._files_scroll.winfo_children():
-            w.destroy()
-        years = []
-        try:
-            for item in sorted(os.listdir(BASE_DIR), reverse=True):
-                full = os.path.join(BASE_DIR, item)
-                if os.path.isdir(full) and item.isdigit() and len(item) == 4:
-                    years.append((item, full))
-        except Exception:
-            pass
-
-        if not years:
-            ctk.CTkLabel(self._files_scroll,
-                         text="No data files yet. Run the automation first.",
-                         font=self._f(12), text_color=TEXT_DIM
-                         ).pack(pady=S24)
+    # ========================================================= HELP DIALOG
+    def _open_help(self):
+        if self._help_win and self._help_win.winfo_exists():
+            self._help_win.focus()
             return
 
-        for year, path in years:
-            card = self._card(self._files_scroll)
-            card.pack(fill="x", pady=(0, S6))
-            inner = ctk.CTkFrame(card, fg_color="transparent")
-            inner.pack(fill="x", padx=S16, pady=S12)
+        w, h = 440, 420
+        win = ctk.CTkToplevel(self.root)
+        win.title("Help")
+        win.resizable(False, False)
+        win.configure(fg_color=BG)
+        win.transient(self.root)
+        self._help_win = win
+        self._center_dialog(win, w, h)
 
-            ctk.CTkLabel(inner, text=year, font=self._f(16,"bold"),
-                         text_color=TEXT).pack(side="left")
+        if os.path.exists(ICO_PATH):
+            try:
+                win.after(200, lambda: win.iconbitmap(ICO_PATH))
+            except Exception:
+                pass
 
-            brow = ctk.CTkFrame(inner, fg_color="transparent")
-            brow.pack(side="right")
+        # Red accent stripe
+        ctk.CTkFrame(win, height=3, fg_color=CG_RED,
+                     corner_radius=0).pack(fill="x")
 
-            excel   = os.path.join(path, "exam_results.xlsx")
-            reports = os.path.join(path, "reports")
-            logs    = os.path.join(path, "logs")
+        # Bottom section (pinned to bottom)
+        bottom = ctk.CTkFrame(win, fg_color="transparent")
+        bottom.pack(side="bottom", fill="x", padx=S16, pady=(0, S12))
 
-            if os.path.exists(excel):
-                self._btn_primary(brow, "Open Excel",
-                                  lambda p=excel: self._open_path(p),
-                                  height=32, width=100
-                                  ).pack(side="left", padx=(0, S8))
-            if os.path.exists(reports):
-                self._btn_secondary(brow, "Reports",
-                                    lambda p=reports: self._open_path(p),
-                                    height=32, width=80
-                                    ).pack(side="left", padx=(0, S8))
-            if os.path.exists(logs):
-                self._btn_secondary(brow, "Logs",
-                                    lambda p=logs: self._open_path(p),
-                                    height=32, width=70
-                                    ).pack(side="left")
+        ctk.CTkLabel(bottom,
+                     text="This is an unofficial tool and is not affiliated with, "
+                          "endorsed by, or associated with City & Guilds. E-volve "
+                          "and SecureAssess are trademarks of The City and Guilds "
+                          "of London Institute.",
+                     font=self._f(10), text_color=TEXT_DIM, anchor="w",
+                     justify="left", wraplength=390
+                     ).pack(anchor="w", side="bottom")
+
+        self._divider(bottom).pack(fill="x", side="bottom", pady=(0, S8))
+
+        btn_row = ctk.CTkFrame(bottom, fg_color="transparent")
+        btn_row.pack(fill="x", side="bottom", pady=(0, S10))
+        self._btn_secondary(btn_row, "View on GitHub",
+                            lambda: webbrowser.open(REPO_URL),
+                            height=32, width=130).pack(side="left", padx=(0, S8))
+        self._btn_secondary(btn_row, "Report an Issue",
+                            lambda: webbrowser.open(ISSUES_URL),
+                            height=32, width=130).pack(side="left")
+
+        self._divider(bottom).pack(fill="x", side="bottom", pady=(0, S10))
+
+        # Top section (steps)
+        top = ctk.CTkFrame(win, fg_color="transparent")
+        top.pack(fill="both", expand=True, padx=S16, pady=S12)
+
+        ctk.CTkLabel(top, text="Getting Started",
+                     font=self._f(16, "bold"), text_color=TEXT,
+                     anchor="w").pack(anchor="w", pady=(0, S12))
+
+        steps = (
+            "1. Set a master password on first launch.",
+            "2. Open Settings to add your E-volve SecureAssess login(s).",
+            "3. Click Run Automation on the main screen.",
+            "4. Results are saved to Excel and PDF reports are downloaded, organised by year.",
+            "5. Close Excel before running automation again.",
+        )
+        for step in steps:
+            ctk.CTkLabel(top, text=step, font=self._f(12),
+                         text_color=TEXT_MID, anchor="w",
+                         justify="left", wraplength=390
+                         ).pack(anchor="w", pady=(0, S6))
+
+    # ========================================================= FILE HELPERS
+    def _open_current_excel(self):
+        year = str(datetime.now().year)
+        excel = os.path.join(BASE_DIR, year, "exam_results.xlsx")
+        if os.path.exists(excel):
+            self._open_path(excel)
+        else:
+            messagebox.showinfo(
+                "Not Found",
+                f"No Excel file found for {year}.\n\n"
+                "Run automation first to generate results.")
+
+    def _open_current_folder(self, subfolder):
+        year = str(datetime.now().year)
+        path = os.path.join(BASE_DIR, year, subfolder)
+        if os.path.exists(path):
+            self._open_path(path)
+        else:
+            messagebox.showinfo(
+                "Not Found",
+                f"No {subfolder} folder found for {year}.\n\n"
+                "Run automation first to generate results.")
 
     def _open_path(self, path):
         try:
             os.startfile(path)
         except Exception as e:
-            self._toast(f"Could not open: {e}", "error")
+            self._set_status(f"Could not open: {e}", DANGER)
 
-    # ========================================================= HELP
-    def _build_help(self):
-        f = self._tab_help
-        scroll = ctk.CTkScrollableFrame(f, fg_color="transparent", corner_radius=0)
-        scroll.pack(fill="both", expand=True, pady=(0, S6))
+    # ========================================================= LAST RUN
+    def _load_last_run(self):
+        try:
+            if os.path.exists(LAST_RUN_FILE):
+                with open(LAST_RUN_FILE, "r") as fh:
+                    data = json.load(fh)
+                ts = data.get("timestamp", "?")
+                accts = data.get("accounts", 0)
+                rows = data.get("new_rows", 0)
+                pdfs = data.get("pdfs", 0)
+                errs = data.get("errors", 0)
+                self._results_lbl.configure(
+                    text=(f"Last run: {ts}  |  {accts} account(s), "
+                          f"{rows} new rows, {pdfs} PDFs, {errs} error(s)"),
+                    text_color=TEXT_MID)
+                self._results_lbl.pack(fill="x", padx=S16, pady=(S4, S8))
+        except Exception:
+            pass
 
-        def section(title, body):
-            ctk.CTkLabel(scroll, text=title, font=self._f(13,"bold"),
-                         text_color=TEXT, anchor="w"
-                         ).pack(anchor="w", padx=S4, pady=(S12, S2))
-            ctk.CTkLabel(scroll, text=body, font=self._f(12),
-                         text_color=TEXT_MID, anchor="w",
-                         justify="left", wraplength=800
-                         ).pack(anchor="w", padx=S4, pady=(0, S2))
+    def _save_last_run(self, stats):
+        try:
+            os.makedirs(os.path.dirname(LAST_RUN_FILE), exist_ok=True)
+            data = {
+                "timestamp": datetime.now().strftime("%d/%m/%Y %H:%M"),
+                "accounts": stats.accounts_processed,
+                "new_rows": stats.new_rows_added,
+                "pdfs": stats.pdfs_downloaded,
+                "errors": stats.errors_encountered,
+            }
+            with open(LAST_RUN_FILE, "w") as fh:
+                json.dump(data, fh)
+        except Exception:
+            pass
 
-        ctk.CTkLabel(scroll, text="How to Use", font=self._f(18,"bold"),
-                     text_color=TEXT, anchor="w"
-                     ).pack(anchor="w", padx=S4, pady=(S4, S4))
-        ctk.CTkLabel(scroll,
-                     text="This tool automates the download of exam results and PDF "
-                          "reports from the City & Guilds E-volve SecureAssess platform. "
-                          "It logs into your account(s), reads the results table, saves "
-                          "data to Excel, and downloads PDF reports automatically.",
-                     font=self._f(12), text_color=TEXT_MID, anchor="w",
-                     justify="left", wraplength=800
-                     ).pack(anchor="w", padx=S4, pady=(0, S8))
+    # ========================================================= ACCOUNT DROPDOWN
+    def _show_account_menu(self):
+        import tkinter as tk
+        menu = tk.Menu(self.root, tearoff=0, font=(FONT, 11))
+        for val in self._account_values:
+            menu.add_command(
+                label=val, command=lambda v=val: self._select_account(v))
+        x = self._dd_frame.winfo_rootx()
+        y = self._dd_frame.winfo_rooty() + self._dd_frame.winfo_height()
+        menu.post(x, y)
 
-        self._divider(scroll).pack(fill="x", pady=S4)
+    def _select_account(self, value):
+        self.account_var.set(value)
 
-        section("Getting Started",
-                "1.  Set a master password on first launch.\n"
-                "2.  Go to the Accounts tab and add your E-volve login(s).\n"
-                "3.  Return to Dashboard and click Run Automation.\n"
-                "4.  Results are saved to YYYY/exam_results.xlsx, organised by year.")
-        section("Dashboard",
-                "Select which account to run, or leave on 'All Accounts' to process "
-                "every saved login in sequence. The progress bar and activity log show "
-                "real-time status. Toggle 'Show browser' to watch the automation.")
-        section("Accounts",
-                "Add or remove your E-volve SecureAssess login credentials. "
-                "All passwords are AES-256 encrypted using your master password "
-                "and stored locally. Nothing is ever sent to an external server.")
-        section("Files",
-                "After running the automation, access your Excel spreadsheets, "
-                "downloaded PDF reports, and log files. Files are organised by year.")
-
-        self._divider(scroll).pack(fill="x", pady=S4)
-
-        section("Tips",
-                "- Close any open Excel files before running automation.\n"
-                "- The tool only downloads results not already in your spreadsheet.\n"
-                "- Date filters are applied automatically.\n"
-                "- If a run fails, check the activity log for details.\n"
-                "- Forgot your master password? Use the Reset option on the login screen.")
-
-        self._divider(scroll).pack(fill="x", pady=S4)
-
-        ctk.CTkLabel(scroll, text="Open Source", font=self._f(13,"bold"),
-                     text_color=TEXT, anchor="w"
-                     ).pack(anchor="w", padx=S4, pady=(S12, S2))
-        ctk.CTkLabel(scroll,
-                     text=f"Built and maintained by {AUTHOR} (@{AUTHOR_HANDLE}). "
-                          "If you find this useful, your support is appreciated.",
-                     font=self._f(12), text_color=TEXT_MID, anchor="w",
-                     justify="left", wraplength=800
-                     ).pack(anchor="w", padx=S4, pady=(0, S10))
-
-        btn_row = ctk.CTkFrame(scroll, fg_color="transparent")
-        btn_row.pack(anchor="w", padx=S4, pady=(0, S8))
-        self._btn_primary(btn_row, "Support on Ko-fi",
-                          lambda: webbrowser.open(KOFI_URL),
-                          height=36, width=150, fg_color=AMBER,
-                          hover_color="#BF360C"
-                          ).pack(side="left", padx=(0, S8))
-        self._btn_secondary(btn_row, "Report an Issue",
-                            lambda: webbrowser.open(ISSUES_URL),
-                            height=36, width=150
-                            ).pack(side="left", padx=(0, S8))
-        self._btn_secondary(btn_row, "View on GitHub",
-                            lambda: webbrowser.open(REPO_URL),
-                            height=36, width=150
-                            ).pack(side="left")
-
-        self._divider(scroll).pack(fill="x", pady=S4)
-
-        ctk.CTkLabel(scroll, text="Disclaimer", font=self._f(13,"bold"),
-                     text_color=TEXT, anchor="w"
-                     ).pack(anchor="w", padx=S4, pady=(S12, S2))
-        ctk.CTkLabel(scroll,
-                     text=f"{APP_TITLE} {APP_SUBTITLE} {APP_VER}\n\n"
-                          "This is an unofficial tool and is not affiliated with, "
-                          "endorsed by, or associated with City & Guilds. E-volve and "
-                          "SecureAssess are trademarks of The City and Guilds of London "
-                          "Institute.",
-                     font=self._f(11), text_color=TEXT_DIM, anchor="w",
-                     justify="left", wraplength=800
-                     ).pack(anchor="w", padx=S4, pady=(0, S16))
-
-    # ========================================================= TOAST
-    def _toast(self, message, kind="info"):
-        for w in self._toast_slot.winfo_children():
-            w.destroy()
-        colours = {
-            "success": (SUCCESS_BG, SUCCESS),
-            "error":   (DANGER_BG,  DANGER),
-            "info":    (CG_RED_LIGHT, CG_RED),
-        }
-        bg, fg = colours.get(kind, colours["info"])
-        t = ctk.CTkFrame(self._toast_slot, fg_color=bg,
-                         corner_radius=8, height=36)
-        t.pack(fill="x", pady=(0, S6))
-        t.pack_propagate(False)
-        ctk.CTkLabel(t, text=message, font=self._f(12),
-                     text_color=fg).pack(side="left", padx=S16)
-        ctk.CTkButton(t, text="✕", width=24, height=24, corner_radius=6,
-                      fg_color="transparent", hover_color=ELEVATED,
-                      text_color=TEXT_DIM, font=self._f(11),
-                      command=t.destroy).pack(side="right", padx=S8)
-        self.root.after(5000, lambda: t.destroy() if t.winfo_exists() else None)
+    # ========================================================= ACCOUNT DATA
+    def _refresh_account_data(self):
+        if not os.path.exists(ENCRYPTED_CREDENTIALS_FILE):
+            self.cred_lbl.configure(text="0 accounts")
+            self._account_values = ["All Accounts"]
+            self._select_account("All Accounts")
+            return
+        try:
+            creds = self.manager.list_credentials(
+                master_password=self.master_password)
+            n = len(creds)
+            self.cred_lbl.configure(
+                text=f"{n} account{'s' if n!=1 else ''}")
+            names = [c.get("username","?") for c in creds]
+            self._account_values = ["All Accounts"] + names
+        except Exception:
+            self.cred_lbl.configure(text="Error")
 
     # ========================================================= LOGGING
     def _log(self, msg):
@@ -908,6 +948,12 @@ class EvolveGUI:
     def _set_status(self, text, colour=TEXT_MID):
         self.status_lbl.configure(text=text, text_color=colour)
 
+    def _show_progress_section(self):
+        if not self._prog_shown:
+            self.status_lbl.configure(text_color=TEXT_MID)
+            self.progress_bar.configure(fg_color=ELEVATED, progress_color=CG_RED)
+            self._prog_shown = True
+
     def _set_progress(self, val):
         self.progress_bar.set(max(0.0, min(1.0, val)))
 
@@ -915,27 +961,41 @@ class EvolveGUI:
     def _check_excel_locks(self):
         locked = []
         for p in glob.glob(os.path.join(BASE_DIR, "*", "exam_results.xlsx")):
+            year = os.path.basename(os.path.dirname(p))
+            # Check for Excel's hidden ~$ lock file (fast path)
+            lock_file = os.path.join(os.path.dirname(p), "~$exam_results.xlsx")
+            if os.path.exists(lock_file):
+                locked.append(year)
+                continue
+            # Try read+write access - conflicts with Excel's sharing lock
             try:
-                with open(p, "a"):
+                with open(p, "a+b"):
                     pass
             except (IOError, PermissionError):
-                locked.append(os.path.basename(os.path.dirname(p)))
+                locked.append(year)
         return locked
 
     def _run_automation(self):
         if self.automation_thread and self.automation_thread.is_alive():
-            self._toast("Automation is already running.", "error"); return
+            self._set_status("Automation is already running.", DANGER)
+            return
         try:
-            creds = self.manager.list_credentials(master_password=self.master_password)
+            creds = self.manager.list_credentials(
+                master_password=self.master_password)
             if not creds:
-                self._toast("No accounts configured. Add one in Accounts.", "error")
+                self._set_status(
+                    "No accounts configured. Open Settings to add one.",
+                    DANGER)
                 return
         except Exception as e:
-            self._toast(f"Error: {e}", "error"); return
+            self._set_status(f"Error: {e}", DANGER)
+            return
 
         locked = self._check_excel_locks()
         if locked:
-            self._toast(f"Close Excel first: {', '.join(locked)}/exam_results.xlsx", "error")
+            self._set_status(
+                f"Close Excel first: {', '.join(locked)}/exam_results.xlsx",
+                DANGER)
             return
 
         sel = self.account_var.get()
@@ -947,13 +1007,14 @@ class EvolveGUI:
         self.log_text.configure(state="normal")
         self.log_text.delete("1.0","end")
         self.log_text.configure(state="disabled")
-        for w in self._banner_slot.winfo_children():
-            w.destroy()
 
-        self.run_btn.configure(state="disabled", text="Running…", fg_color=ELEVATED,
-                               text_color=TEXT_MID)
+        self.run_btn.configure(state="disabled", text="Running...",
+                               fg_color=ELEVATED, text_color=TEXT_MID)
+        self._excel_btn.configure(state="disabled", fg_color=ELEVATED,
+                                   text_color=TEXT_DIM)
+        self._show_progress_section()
         self._set_progress(0)
-        self._set_status("Starting…", CG_RED)
+        self._set_status("Starting...", CG_RED)
 
         headless = not self.show_browser.get()
         self.automation_thread = threading.Thread(
@@ -1009,46 +1070,52 @@ class EvolveGUI:
         if "Starting for account" in msg:
             self._acct_progress = 0.0; self._acct_cur_page = 0
             self._acct_pages = 1; self._push_progress()
-            self._set_status(self._stat("Logging in…"), CG_RED)
+            self._set_status(self._stat("Logging in..."), CG_RED)
         elif "Login submitted" in msg:
             self._acct_progress = W["login"]; self._push_progress()
-            self._set_status(self._stat("Loading results…"), CG_RED)
+            self._set_status(self._stat("Loading results..."), CG_RED)
         elif "Results tab opened" in msg:
-            self._acct_progress = W["login"]+W["navigate"]; self._push_progress()
+            self._acct_progress = W["login"]+W["navigate"]
+            self._push_progress()
         elif "Switched to Results iframe" in msg:
             self._acct_progress = W["login"]+W["navigate"]+W["iframe"]
             self._push_progress()
         elif "Refresh button clicked" in msg:
-            self._acct_progress = W["login"]+W["navigate"]+W["iframe"]+W["refresh"]
+            self._acct_progress = (W["login"]+W["navigate"]+W["iframe"]
+                                   +W["refresh"])
             self._push_progress()
-            self._set_status(self._stat("Applying filters…"), CG_RED)
+            self._set_status(self._stat("Applying filters..."), CG_RED)
         elif "Date filter updated" in msg:
-            self._acct_progress = (W["login"]+W["navigate"]+W["iframe"]+
-                                   W["refresh"]+W["filter"])
+            self._acct_progress = (W["login"]+W["navigate"]+W["iframe"]
+                                   +W["refresh"]+W["filter"])
             self._push_progress()
-            self._set_status(self._stat("Loading data…"), CG_RED)
+            self._set_status(self._stat("Loading data..."), CG_RED)
         elif "page(s) to scrape" in msg:
             m = re.search(r"Found (\d+) page", msg)
             if m:
                 self._acct_pages = max(int(m.group(1)), 1)
-            base = W["login"]+W["navigate"]+W["iframe"]+W["refresh"]+W["filter"]+W["hashes"]
+            base = (W["login"]+W["navigate"]+W["iframe"]
+                    +W["refresh"]+W["filter"]+W["hashes"])
             self._acct_progress = base; self._push_progress()
-            self._set_status(self._stat(f"Scraping {self._acct_pages} page(s)…"), CG_RED)
+            self._set_status(
+                self._stat(f"Scraping {self._acct_pages} page(s)..."),
+                CG_RED)
         elif "Processing page" in msg:
             m = re.search(r"Processing page (\d+)/(\d+)", msg)
             if m:
                 pg = int(m.group(1)); self._acct_cur_page = pg
-                base = (W["login"]+W["navigate"]+W["iframe"]+
-                        W["refresh"]+W["filter"]+W["hashes"])
+                base = (W["login"]+W["navigate"]+W["iframe"]
+                        +W["refresh"]+W["filter"]+W["hashes"])
                 self._acct_progress = base + W["scrape"]*(pg/self._acct_pages)
                 self._push_progress()
-                self._set_status(self._stat(f"Page {pg}/{self._acct_pages}"), CG_RED)
+                self._set_status(
+                    self._stat(f"Page {pg}/{self._acct_pages}"), CG_RED)
         elif "Processing PDF for" in msg:
-            base = (W["login"]+W["navigate"]+W["iframe"]+
-                    W["refresh"]+W["filter"]+W["hashes"]+W["scrape"])
+            base = (W["login"]+W["navigate"]+W["iframe"]
+                    +W["refresh"]+W["filter"]+W["hashes"]+W["scrape"])
             self._acct_progress = min(base+W["pdfs"]*0.5, 0.95)
             self._push_progress()
-            self._set_status(self._stat("Downloading PDFs…"), CG_RED)
+            self._set_status(self._stat("Downloading PDFs..."), CG_RED)
         elif "All done for account" in msg:
             self._acct_progress = 0.95; self._push_progress()
         elif "Chrome closed" in msg:
@@ -1056,71 +1123,84 @@ class EvolveGUI:
             self._push_progress()
 
     def _stat(self, detail):
-        return f"Account {self._done_accounts+1}/{self._total_accounts}  |  {detail}"
+        return (f"Account {self._done_accounts+1}/"
+                f"{self._total_accounts}  |  {detail}")
 
     def _push_progress(self):
         if self._total_accounts == 0:
             return
-        overall = (self._done_accounts + self._acct_progress) / self._total_accounts
+        overall = ((self._done_accounts + self._acct_progress)
+                   / self._total_accounts)
         self._set_progress(overall)
 
     # ----------------------------------------------- completion / error
     def _on_complete(self, stats):
         self.run_btn.configure(state="normal", text="Run Automation",
-                               fg_color=CG_RED, text_color="#FFFFFF")
+                               fg_color=CG_RED, text_color=SURFACE)
+        self._excel_btn.configure(state="normal", fg_color=CG_RED,
+                                   text_color=SURFACE)
         self._set_progress(1.0)
         self._set_status("Completed", SUCCESS)
-        sep = "─" * 48
+        sep = "-" * 48
         self._log(f"\n{sep}\n  COMPLETED\n"
                   f"  Accounts : {stats.accounts_processed}\n"
                   f"  New rows : {stats.new_rows_added}\n"
                   f"  PDFs     : {stats.pdfs_downloaded}\n"
                   f"  Errors   : {stats.errors_encountered}\n{sep}")
-        for w in self._banner_slot.winfo_children():
-            w.destroy()
-        txt = (f"Completed — {stats.accounts_processed} account(s), "
-               f"{stats.new_rows_added} new rows, "
-               f"{stats.pdfs_downloaded} PDFs, "
-               f"{stats.errors_encountered} error(s)")
-        banner = ctk.CTkFrame(self._banner_slot, fg_color=SUCCESS_BG,
-                              corner_radius=8, height=36)
-        banner.pack(fill="x", pady=(0, S6))
-        banner.pack_propagate(False)
-        ctk.CTkLabel(banner, text=txt, font=self._f(12),
-                     text_color=SUCCESS).pack(side="left", padx=S16)
-        ctk.CTkButton(banner, text="✕", width=24, height=24, corner_radius=6,
-                      fg_color="transparent", hover_color=ELEVATED,
-                      text_color=TEXT_DIM, font=self._f(11),
-                      command=banner.destroy).pack(side="right", padx=S8)
+
+        # Update results summary
+        self._results_lbl.configure(
+            text=(f"Completed - {stats.accounts_processed} account(s), "
+                  f"{stats.new_rows_added} new rows, "
+                  f"{stats.pdfs_downloaded} PDFs, "
+                  f"{stats.errors_encountered} error(s)"),
+            text_color=SUCCESS)
+        if not self._results_lbl.winfo_ismapped():
+            self._results_lbl.pack(fill="x", padx=S16, pady=(S4, S8))
+
+        self._save_last_run(stats)
 
     def _on_error(self, msg):
         self.run_btn.configure(state="normal", text="Run Automation",
-                               fg_color=CG_RED, text_color="#FFFFFF")
+                               fg_color=CG_RED, text_color=SURFACE)
+        self._excel_btn.configure(state="normal", fg_color=CG_RED,
+                                   text_color=SURFACE)
         self._set_progress(0)
         self._set_status("Failed", DANGER)
         self._log(f"\nERROR: {msg}\n")
-        self._toast(f"Automation failed: {msg}", "error")
 
     # ================================================= WINDOW MANAGEMENT
     def _on_close(self):
         if self.automation_thread and self.automation_thread.is_alive():
-            if not messagebox.askyesno("Confirm", "Automation is running. Quit anyway?"):
+            if not messagebox.askyesno(
+                    "Confirm", "Automation is running. Quit anyway?"):
                 return
         self.root.destroy()
 
-    # ================================================= ENTRY POINT
-    def _maximize(self):
-        """Maximize window — called via after() so the event loop is running."""
-        try:
-            self.root.state("zoomed")
-        except Exception:
-            w, h = 1280, 800
-            sx = max((self.root.winfo_screenwidth()  - w) // 2, 0)
-            sy = max((self.root.winfo_screenheight() - h) // 2, 0)
-            self.root.geometry(f"{w}x{h}+{sx}+{sy}")
+    def _center_window(self):
+        """Center window at 700x520 on the current screen."""
+        w, h = 700, 520
+        sx = max((self.root.winfo_screenwidth()  - w) // 2, 0)
+        sy = max((self.root.winfo_screenheight() - h) // 2, 0)
+        self.root.geometry(f"{w}x{h}+{sx}+{sy}")
 
+    def _center_dialog(self, dialog, w, h):
+        """Center a dialog relative to the parent window (multi-monitor safe)."""
+        self.root.update_idletasks()
+        px = self.root.winfo_x()
+        py = self.root.winfo_y()
+        pw = self.root.winfo_width()
+        ph = self.root.winfo_height()
+        x = px + (pw - w) // 2
+        y = py + (ph - h) // 2
+        geo = f"{w}x{h}+{x}+{y}"
+        dialog.geometry(geo)
+        # Re-apply after CTkToplevel finishes its own geometry setup
+        dialog.after(10, lambda: dialog.geometry(geo))
+
+    # ================================================= ENTRY POINT
     def run(self):
-        """Launch the application maximised."""
+        """Launch the application."""
         self._show_lock_screen()
-        self.root.after(50, self._maximize)
+        self.root.after(50, self._center_window)
         self.root.mainloop()

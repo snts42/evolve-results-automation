@@ -148,18 +148,45 @@ def get_total_pages(driver):
     except Exception:
         return 1  # Only 1 page if pagination not found
 
+def _get_current_page(driver):
+    """Get the currently selected page number from pagination."""
+    try:
+        selected = driver.find_element(By.CSS_SELECTOR, ".dx-page.dx-selection")
+        return int(selected.text)
+    except Exception:
+        return None
+
 def click_next_page(driver):
     """Click the Next button to go to next page. Returns True if successful, False if already on last page."""
+    page_before = _get_current_page(driver)
+    target_page = (page_before or 1) + 1
+
+    # Strategy 1: Click the target page number directly (most reliable)
+    try:
+        pages = driver.find_elements(By.CSS_SELECTOR, ".dx-page")
+        for p in pages:
+            if p.text.strip() == str(target_page):
+                driver.execute_script("arguments[0].scrollIntoView(true);", p)
+                time.sleep(0.5)
+                driver.execute_script("arguments[0].click();", p)
+                logging.info(f"Clicked page {target_page} element, waiting for table reload...")
+                time.sleep(5)
+                return True
+    except Exception as e:
+        logging.debug(f"Page number click failed: {e}")
+
+    # Strategy 2: Click the Next button via JavaScript
     try:
         next_btn = driver.find_element(By.CSS_SELECTOR, ".dx-navigate-button.dx-next-button")
-        
-        # Check if disabled
-        if "dx-button-disable" in next_btn.get_attribute("class"):
-            return False  # Already on last page
-        
-        next_btn.click()
-        time.sleep(4)  # Wait for page to load
+        if "dx-button-disable" in (next_btn.get_attribute("class") or ""):
+            logging.info("Next button is disabled - already on last page")
+            return False
+        driver.execute_script("arguments[0].scrollIntoView(true);", next_btn)
+        time.sleep(0.5)
+        driver.execute_script("arguments[0].click();", next_btn)
+        logging.info(f"Clicked next button, waiting for table reload...")
+        time.sleep(5)
         return True
     except Exception as e:
-        logging.warning(f"Failed to click next page: {e}")
+        logging.warning(f"Next button click failed: {e}")
         return False

@@ -1,89 +1,87 @@
-# Evolve Results Automation
+# E-volve SecureAssess Automation
 
-## Introduction
+An open-source desktop tool for exam centre staff to automate the download of candidate results and PDF reports from the City & Guilds E-volve SecureAssess platform.
 
-**Evolve Results Automation** is an open-source tool for exam centre staff to securely automate the download of candidate results and reports from the City & Guilds Evolve platform, which lacks official API support.
-
-- Designed for internal/admin use only
-- Automates browser actions (Selenium)
-- All credentials are stored securely using AES-256 encryption
-- Provides a user-friendly .exe for non-technical users (no Python required)
+![Windows](https://img.shields.io/badge/platform-Windows-blue)
+![Python](https://img.shields.io/badge/python-3.13%2B-yellow)
+![License](https://img.shields.io/badge/license-MIT-green)
 
 ## Features
 
-- Logs into Evolve and navigates to the Results section
-- Downloads all results data into an Excel spreadsheet (`exam_results.xlsx`)
-- Extracts and saves direct PDF links for candidate reports
-- Downloads all candidate reports as PDFs into a structured folder by date
-- Supports multiple Evolve accounts (multi-credential access)
-- Robust error handling and logging
-- Encrypted credential management via a modern desktop GUI (CustomTkinter)
+- **Desktop GUI** built with CustomTkinter (light mode, City & Guilds branding)
+- **Automated scraping** of the E-volve Results table via Selenium (headless or visible browser)
+- **PDF report downloads** with direct links extracted from the candidate report page
+- **Multi-account support** with per-account automation
+- **AES-256 encrypted credentials** protected by a master password
+- **Year-based folder organisation** for Excel results, PDF reports, and logs
+- **Pagination support** across multi-page result sets
+- **Date filtering** automatically set to the 1st of the previous month
+- **PDF resume** across runs (skips already-downloaded reports)
+- **Automatic ChromeDriver management** via Selenium Manager
 
-## Quick Start (.exe Users)
+## Quick Start
 
-1. Download the latest `.exe` from [Releases](https://github.com/snts42/evolve-results-automation/releases/)
-2. Run the `.exe` — a desktop GUI will open
-3. Set a master password on first launch, then add your Evolve credentials in the **Accounts** tab
-4. Click **Start Automation** from the **Dashboard** tab
-5. Results are saved to `YYYY/exam_results.xlsx`, PDFs to `YYYY/reports/MM DD/`, logs to `YYYY/logs/MM DD/`
+### Download the .exe (recommended)
 
-> **Note:** ChromeDriver is managed automatically. Just make sure Google Chrome is installed.
+1. Download `EvolveResultsAutomation.exe` from the [latest release](https://github.com/snts42/evolve-results-automation/releases/latest)
+2. Place it in a dedicated folder (data files are saved alongside the exe)
+3. Run it and set a master password on first launch
+4. Open **Settings** to add your E-volve SecureAssess login(s)
+5. Click **Run Automation**
 
-> **If you forget your master password:**
-> Delete the `credentials.enc` file and restart the program to re-onboard.
+> **Requires:** Google Chrome installed. ChromeDriver is downloaded automatically.
 
-## For Python Users / Developers
+### Run from source
 
-1. Clone/download this repository
-2. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-3. Run:
-   ```bash
-   python -m evolve_results_automation
-   ```
+```bash
+git clone https://github.com/snts42/evolve-results-automation.git
+cd evolve-results-automation
+pip install -r requirements.txt
+python -m evolve_results_automation
+```
+
+## Output Structure
+
+All data is organised by exam completion year:
+
+```
+EvolveResultsAutomation.exe
+credentials.enc
+2026/
+  exam_results.xlsx
+  reports/
+    03 15/
+      FirstName_LastName_TestName.pdf
+  logs/
+    03 15/
+      log_2026-03-15_09-30-00.txt
+```
+
+## Security
+
+- Credentials are encrypted with **AES-256** using a master password you set on first launch
+- No plaintext credentials are ever written to disk
+- The master password is prompted once per session
+- If you forget your master password, delete `credentials.enc` and restart to set a new one
 
 ## Dependencies
 
-- Python >= 3.13.3
-- selenium >= 4.33.0
-- pandas >= 2.3.0
-- requests >= 2.32.3
-- openpyxl >= 3.1.5
-- cryptography >= 45.0.5
-- customtkinter >= 5.2.2
-- Pillow >= 10.0.0
-- colorama >= 0.4.6
+All managed via `requirements.txt`:
 
-## Security & Credential Management
-
-- **All credentials are stored encrypted** (AES-256, master password required)
-- No plaintext credentials are ever written to disk
-- You must remember your master password; if lost, delete `credentials.enc` to reset
-- Master password is prompted only once per session
-- No legacy `.json` plain-text credentials logic remains
-
-## ChromeDriver
-
-ChromeDriver is managed automatically by Selenium Manager (built into Selenium 4.6+). You do **not** need to download or update ChromeDriver manually — it is resolved automatically based on your installed Chrome version.
-
-If you encounter issues starting Chrome, ensure:
-- Google Chrome is installed on your machine
-- You have internet access (for the initial ChromeDriver download)
-
-## Versioning & Release Notes
-
-- **Current release:** v1.0.0
-- Modern desktop GUI (CustomTkinter), encrypted credentials, `.exe` support, automatic ChromeDriver management
-- Year-based folder organisation for Excel results, PDF reports, and logs
-- All previous `.py` scripts and plaintext credential logic are obsolete
+- **selenium** - browser automation
+- **pandas** - data processing
+- **requests** - PDF downloads
+- **openpyxl** - Excel read/write
+- **cryptography** - AES-256 credential encryption
+- **customtkinter** - desktop GUI framework
+- **colorama** - terminal colour output
 
 ## License
 
-MIT. See [LICENSE](LICENSE) for details.
+MIT. See [LICENSE](LICENSE.md) for details.
 
 ---
 
-**Author:**  
-Alex Santonastaso | [santonastaso.codes](https://santonastaso.codes)
+**Disclaimer:** This is an unofficial tool and is not affiliated with, endorsed by, or associated with City & Guilds. E-volve and SecureAssess are trademarks of The City and Guilds of London Institute.
+
+**Author:** Alex Santonastaso | [santonastaso.codes](https://santonastaso.codes)

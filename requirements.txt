@@ -5,4 +5,3 @@ openpyxl==3.1.5
 colorama==0.4.6
 cryptography==45.0.5
 customtkinter==5.2.2
-Pillow>=10.0.0

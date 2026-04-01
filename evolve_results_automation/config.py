@@ -3,7 +3,7 @@ import sys
 from datetime import datetime
 
 if getattr(sys, 'frozen', False):
-    # Running as a PyInstaller bundled .exe — use the exe's directory
+    # Running as a PyInstaller bundled .exe - use the exe's directory
     BASE_DIR = os.path.dirname(sys.executable)
 else:
     # Running as a Python module (python -m evolve_results_automation)

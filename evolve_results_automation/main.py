@@ -7,8 +7,6 @@ import requests
 from datetime import datetime
 from selenium.webdriver.common.by import By
 
-from evolve_results_automation.gui_tk import EvolveGUI
-
 from evolve_results_automation.config import (
    ENCRYPTED_CREDENTIALS_FILE, COLUMNS, BASE_DIR, get_excel_file_for_year
 )
@@ -149,9 +147,6 @@ class EvolveAutomation:
                             completed_val = str(r.get("Completed", "")).strip()
                             if not completed_val or completed_val == "nan":
                                 continue
-                            first_name = str(r.get("First name", "")).strip()
-                            if not first_name or first_name == "nan":
-                                continue
                             
                             existing_hashes.add(unique_row_hash(r))
                             # If row needs PDF, add to rows_by_year for processing
@@ -203,91 +198,89 @@ class EvolveAutomation:
                     for year_rows in rows_by_year.values():
                         all_current_rows.extend(year_rows)
                     
-                    if not all_current_rows:
-                        continue
-                    
-                    result_df = pd.DataFrame(all_current_rows)
-                    
-                    # Get rows needing PDF processing: missing PDF report downloaded timestamp
-                    no_dl = (result_df["PDF report downloaded"].isnull()) | (result_df["PDF report downloaded"] == "")
-                    all_pdf_needed = result_df[no_dl]
-                    
-                    # Process all rows needing PDFs via web UI
-                    for idx, row in all_pdf_needed.iterrows():
-                        try:
-                            # Skip rows with invalid core fields
-                            completed = str(row.get("Completed", "")).strip()
-                            if not completed or completed == "nan":
-                                continue
-                            
-                            # Try to select the row - if it's not on this page, skip it
-                            if not select_table_row(driver, row):
-                                continue  # Row not on this page, skip
-                            
-                            logging.info(f"Processing PDF for: {row['First name']} {row['Last name']} ({row['Test Name']})")
-                            click_candidate_report_button(driver)
-                            time.sleep(2)
-                            html = driver.page_source
-                            file_name = extract_pdf_filename_from_html(html)
-                            if file_name:
-                                pdf_url = f"https://evolve.cityandguilds.com/secureassess/CustomerData/Evolve/DocumentStore/{file_name}"
-                                logging.info(f"PDF URL extracted: {pdf_url}")
-                                # Download the PDF immediately
-                                completed = row["Completed"]
-                                target_dir = make_report_folder_path(completed)
-                                target_name = report_filename(row)
-                                save_path = os.path.join(target_dir, target_name)
-                                
-                                # Check if PDF already exists on disk
-                                if os.path.exists(save_path):
-                                    logging.info(f"PDF exists on disk, stamping timestamp")
-                                else:
-                                    r = requests.get(pdf_url, stream=True)
-                                    if r.status_code == 200:
-                                        with open(save_path, 'wb') as f:
-                                            for chunk in r.iter_content(10240):
-                                                f.write(chunk)
-                                        logging.info(f"PDF downloaded and saved to {save_path}")
-                                        self.stats.pdfs_downloaded += 1
-                                    else:
-                                        logging.warning(f"Failed to download PDF for idx={idx}. Status: {r.status_code}")
-                                        continue
-                                
-                                dl_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                                result_df.at[idx, "PDF report downloaded"] = dl_time
-                                all_current_rows[idx]["PDF report downloaded"] = dl_time
-                            else:
-                                logging.warning("No PDF file name found! Skipping.")
-                            
-                            # Incremental save after each PDF processed (silent to avoid log spam)
-                            row_year = datetime.strptime(row["Completed"], "%d/%m/%Y").year
-                            self._save_year_to_excel(row_year, rows_by_year, silent=True)
-
-                            # Navigate back to results tab (stay on same page)
-                            driver.switch_to.default_content()
-                            results_tab = safe_find(driver, By.XPATH, "//a[@href='#TestAdministration/Results']")
-                            results_tab.click()
-                            time.sleep(3)
-                            switch_to_results_iframe(driver)
-                            time.sleep(2)  # Wait for iframe to load, we're still on the same page
-                        except Exception as e:
-                            logging.error(f"Error processing row idx={idx}: {e}")
-                            self.stats.errors_encountered += 1
+                    if all_current_rows:
+                        result_df = pd.DataFrame(all_current_rows)
+                        
+                        # Get rows needing PDF processing: missing PDF report downloaded timestamp
+                        no_dl = (result_df["PDF report downloaded"].isnull()) | (result_df["PDF report downloaded"] == "")
+                        all_pdf_needed = result_df[no_dl]
+                        
+                        # Process all rows needing PDFs via web UI
+                        for idx, row in all_pdf_needed.iterrows():
                             try:
-                                driver.switch_to.default_content()
-                                goto_results_tab(driver)
-                                switch_to_results_iframe(driver)
+                                # Skip rows with invalid core fields
+                                completed = str(row.get("Completed", "")).strip()
+                                if not completed or completed == "nan":
+                                    continue
+                                
+                                # Try to select the row - if it's not on this page, skip it
+                                if not select_table_row(driver, row):
+                                    continue  # Row not on this page, skip
+                                
+                                logging.info(f"Processing PDF for: {row['First name']} {row['Last name']} ({row['Test Name']})")
+                                click_candidate_report_button(driver)
                                 time.sleep(2)
-                            except Exception as ex:
-                                logging.error(f"Failed to recover after error: {ex}")
-                                break
+                                html = driver.page_source
+                                file_name = extract_pdf_filename_from_html(html)
+                                if file_name:
+                                    pdf_url = f"https://evolve.cityandguilds.com/secureassess/CustomerData/Evolve/DocumentStore/{file_name}"
+                                    logging.info(f"PDF URL extracted: {pdf_url}")
+                                    # Download the PDF immediately
+                                    completed = row["Completed"]
+                                    target_dir = make_report_folder_path(completed)
+                                    target_name = report_filename(row)
+                                    save_path = os.path.join(target_dir, target_name)
+                                    
+                                    # Check if PDF already exists on disk
+                                    if os.path.exists(save_path):
+                                        logging.info(f"PDF exists on disk, stamping timestamp")
+                                    else:
+                                        r = requests.get(pdf_url, stream=True)
+                                        if r.status_code == 200:
+                                            with open(save_path, 'wb') as f:
+                                                for chunk in r.iter_content(10240):
+                                                    f.write(chunk)
+                                            logging.info(f"PDF downloaded and saved to {save_path}")
+                                            self.stats.pdfs_downloaded += 1
+                                        else:
+                                            logging.warning(f"Failed to download PDF for idx={idx}. Status: {r.status_code}")
+                                            continue
+                                    
+                                    dl_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                    result_df.at[idx, "PDF report downloaded"] = dl_time
+                                    all_current_rows[idx]["PDF report downloaded"] = dl_time
+                                else:
+                                    logging.warning("No PDF file name found! Skipping.")
+                                
+                                # Incremental save after each PDF processed (silent to avoid log spam)
+                                row_year = datetime.strptime(row["Completed"], "%d/%m/%Y").year
+                                self._save_year_to_excel(row_year, rows_by_year, silent=True)
+
+                                # Navigate back to results tab (stay on same page)
+                                driver.switch_to.default_content()
+                                results_tab = safe_find(driver, By.XPATH, "//a[@href='#TestAdministration/Results']")
+                                results_tab.click()
+                                time.sleep(3)
+                                switch_to_results_iframe(driver)
+                                time.sleep(2)  # Wait for iframe to load, we're still on the same page
+                            except Exception as e:
+                                logging.error(f"Error processing row idx={idx}: {e}")
+                                self.stats.errors_encountered += 1
+                                try:
+                                    driver.switch_to.default_content()
+                                    goto_results_tab(driver)
+                                    switch_to_results_iframe(driver)
+                                    time.sleep(2)
+                                except Exception as ex:
+                                    logging.error(f"Failed to recover after error: {ex}")
+                                    break
                     
-                    # Move to next page (if not last)
+                    # Move to next page (if not last) - MUST be at end of loop
                     if page_num < total_pages:
                         if not click_next_page(driver):
                             logging.warning(f"Failed to navigate to page {page_num + 1}")
                             break
-
+                    
                 # Final save for all years (logs row counts)
                 for year in rows_by_year:
                     self._save_year_to_excel(year, rows_by_year)
@@ -301,11 +294,3 @@ class EvolveAutomation:
                 driver.quit()
                 logging.info("Chrome closed for this account.\n")
         return self.stats
-
-def main():
-    """Main entry point."""
-    gui = EvolveGUI()
-    gui.run()
-
-if __name__ == "__main__":
-    main()
