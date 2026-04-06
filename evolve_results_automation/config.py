@@ -40,14 +40,20 @@ COLUMNS = [
     "Result Sent", "Result Sent By",
     "E-Certificate sent", "E-Certificate By",
     "Certificate", "Certificate By",
+    # Admin notes
+    "Comments",
     # Technical/auto (right)
-    "Percent", "Duration", "Comments",
-    "Scraping date/time", "PDF report downloaded",
+    "Percent", "Duration",
+    "Scraping date/time", "PDF report save time",
     "Keycode", "Subject"
 ]
 
 # Credentials stay at root level (shared across years)
 ENCRYPTED_CREDENTIALS_FILE = os.path.join(BASE_DIR, "credentials.enc")
+
+# Evolve platform URLs
+RESULTS_URL = "https://evolve.cityandguilds.com/#TestAdministration/Results"
+DOCUMENT_STORE_URL = "https://evolve.cityandguilds.com/secureassess/CustomerData/Evolve/DocumentStore/"
 
 def current_log_path():
     """Get log path for current run (uses current date's year)."""
@@ -57,5 +63,3 @@ def current_log_path():
     os.makedirs(folder, exist_ok=True)
     fname = now.strftime("log_%Y-%m-%d_%H-%M-%S.txt")
     return os.path.join(folder, fname)
-
-LOG_FILE = current_log_path()

@@ -1,29 +1,23 @@
 import logging
-from colorama import Fore, Style
-from .config import LOG_FILE
+from .config import current_log_path
 
-class ColourFormatter(logging.Formatter):
-    COLOURS = {
-        logging.INFO: Fore.GREEN,
-        logging.WARNING: Fore.YELLOW,
-        logging.ERROR: Fore.RED,
-        logging.CRITICAL: Fore.RED + Style.BRIGHT,
-        logging.DEBUG: Fore.WHITE,
-    }
-    RESET = Style.RESET_ALL
 
-    def format(self, record):
-        msg = super().format(record)
-        colour = self.COLOURS.get(record.levelno, self.RESET)
-        return f"{colour}{msg}{self.RESET}"
+class _FlushHandler(logging.FileHandler):
+    """FileHandler that flushes after every log entry so nothing is lost on crash."""
+    def emit(self, record):
+        super().emit(record)
+        self.flush()
+
 
 def setup_logger():
-    # File handler (no colour)
-    file_handler = logging.FileHandler(LOG_FILE, encoding='utf-8')
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+
+    # Avoid adding duplicate handlers on repeated calls
+    if any(isinstance(h, _FlushHandler) for h in root.handlers):
+        return
+
+    log_file = current_log_path()
+    file_handler = _FlushHandler(log_file, encoding='utf-8')
     file_handler.setFormatter(logging.Formatter("%(asctime)s | %(message)s", "%Y-%m-%d %H:%M:%S"))
-
-    # Console handler (colour)
-    console_handler = logging.StreamHandler()
-    console_handler.setFormatter(ColourFormatter("%(asctime)s | %(message)s", "%Y-%m-%d %H:%M:%S"))
-
-    logging.basicConfig(level=logging.INFO, handlers=[file_handler, console_handler])
+    root.addHandler(file_handler)

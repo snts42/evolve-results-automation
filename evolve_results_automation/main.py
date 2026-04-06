@@ -1,34 +1,26 @@
 import os
-import time
-import glob
 import logging
-import pandas as pd
 import requests
+from dataclasses import dataclass
 from datetime import datetime
-from selenium.webdriver.common.by import By
 
 from evolve_results_automation.config import (
-   ENCRYPTED_CREDENTIALS_FILE, COLUMNS, BASE_DIR, get_excel_file_for_year
+    ENCRYPTED_CREDENTIALS_FILE, DOCUMENT_STORE_URL
 )
 from evolve_results_automation.excel_utils import (
-    initialize_excel, load_existing_results, save_results
+    save_year_to_excel, load_all_existing_data
 )
 from evolve_results_automation.selenium_utils import (
-    start_driver, login, goto_results_tab, switch_to_results_iframe,
+    start_driver, login, switch_to_results_iframe,
     reset_and_refresh, parse_results_table, select_table_row,
-    click_candidate_report_button, safe_find, get_total_pages,
-    click_next_page
+    click_candidate_report_button, get_total_pages,
+    click_next_page, navigate_to_results, set_date_filter_to_previous_month_start
 )
 
 from evolve_results_automation.secure_credentials import SecureCredentialManager
 
 from evolve_results_automation.logging_utils import setup_logger
-setup_logger()
-
-from evolve_results_automation.parsing_utils import make_report_folder_path, report_filename, extract_pdf_filename_from_html, unique_row_hash, get_column_map
-from evolve_results_automation.filter_utils import set_date_filter_to_previous_month_start
-
-from dataclasses import dataclass
+from evolve_results_automation.parsing_utils import make_report_folder_path, report_filename, extract_pdf_filename_from_html, unique_row_hash
 
 @dataclass
 class ProcessingStats:
@@ -43,254 +35,177 @@ class EvolveAutomation:
         self.master_password = master_password
         self.selected_username = selected_username
         self.stats = ProcessingStats()
-        self.columns = COLUMNS
-        self.col_map = get_column_map()
-
-    def _save_year_to_excel(self, year, rows_by_year, silent=False):
-        """Save rows for a given year to Excel, merging with existing data and deduplicating."""
-        if year not in rows_by_year:
-            return
-        year_rows = rows_by_year[year]
-        excel_file = get_excel_file_for_year(year)
-        initialize_excel(excel_file, self.columns)
-
-        # Load existing data (may contain rows from previous accounts)
-        existing_df = load_existing_results(excel_file)
-        if not existing_df.empty:
-            existing_df.rename(columns=self.col_map, inplace=True)
-
-        # Create DataFrame from current rows (includes PDF links from processing)
-        new_df = pd.DataFrame(year_rows)
-
-        # Merge existing + new, then deduplicate
-        if not existing_df.empty:
-            combined = pd.concat([existing_df, new_df], ignore_index=True)
-        else:
-            combined = new_df.copy()
-
-        # Remove garbage rows missing core fields
-        core_fields = ["Completed", "First name", "Last name"]
-        for cf in core_fields:
-            if cf in combined.columns:
-                combined = combined[combined[cf].notna() & (combined[cf] != "")]
-
-        # Deduplicate using unique_row_hash, keep last (in-memory rows have latest PDF links)
-        combined['_hash'] = combined.apply(lambda r: unique_row_hash(r), axis=1)
-        combined = combined.drop_duplicates(subset='_hash', keep='last')
-        combined = combined.drop(columns='_hash')
-
-        # Rearrange columns
-        for c in ["Keycode", "Subject"]:
-            if c in combined.columns:
-                combined = pd.concat([combined.drop([c], axis=1), combined[[c]]], axis=1)
-
-        # Sort by completion date
-        if "Completed" in combined.columns:
-            try:
-                combined["Completed_sort"] = pd.to_datetime(combined["Completed"], format="%d/%m/%Y", errors="coerce")
-                combined = combined.sort_values(by="Completed_sort", ascending=True).drop(columns="Completed_sort")
-            except Exception as e:
-                logging.warning(f"Sorting failed for year {year}: {e}")
-
-        save_results(excel_file, combined)
-        if not silent:
-            logging.info(f"Saved {len(combined)} rows to {year}/exam_results.xlsx")
 
     def run(self):
-        # We'll initialize Excel files dynamically as we encounter different years
-        # Load existing data from all years to build hash set
-        # Note: We'll load year-specific files as needed during processing
-
+        """Top-level entry point: setup, decrypt accounts, iterate."""
+        setup_logger()
         accounts = SecureCredentialManager(ENCRYPTED_CREDENTIALS_FILE).decrypt_credentials(self.master_password)
-        
+
         # Filter accounts if specific username selected
         if self.selected_username:
             accounts = [acc for acc in accounts if acc.get("username", "").strip() == self.selected_username]
             if not accounts:
                 logging.error(f"Selected account '{self.selected_username}' not found in credentials")
                 return self.stats
-        
+
+        if not accounts:
+            logging.warning("No accounts found in credentials")
+            return self.stats
+
         for idx_acc, account in enumerate(accounts):
             username = account.get("username", "").strip()
             password = account.get("password", "").strip()
             if not username or not password:
-                logging.warning(f"Credentials missing for account #{idx_acc+1}, skipping this account.")
+                logging.warning(f"Credentials missing, skipping account #{idx_acc+1}")
                 continue
             logging.info(f"--- Starting for account #{idx_acc+1}: {username} ---")
             driver = start_driver(headless=self.headless)
             try:
-                login(driver, username, password)
-                goto_results_tab(driver)
-                switch_to_results_iframe(driver)
-                reset_and_refresh(driver)
-                
-                # Set date filter start to 1st of previous month
-                set_date_filter_to_previous_month_start(driver)
-                time.sleep(2)  # Wait for filter to apply and table to reload
-                
-                # Get total pages
-                total_pages = get_total_pages(driver)
-                logging.info(f"Found {total_pages} page(s) to scrape")
-                
-                # Build hash set from all existing year Excel files to prevent duplicates
-                # Also load existing rows needing PDFs into rows_by_year for resume
-                # (matches legacy behavior: ALL rows checked for missing PDFs)
-                existing_hashes = set()
-                rows_by_year = {}
-                pdf_resume_count = 0
-                for excel_path in glob.glob(os.path.join(BASE_DIR, '*', 'exam_results.xlsx')):
-                    ef = load_existing_results(excel_path)
-                    if not ef.empty:
-                        ef.rename(columns=self.col_map, inplace=True)
-                        for _, r in ef.iterrows():
-                            # Skip garbage rows missing core fields
-                            completed_val = str(r.get("Completed", "")).strip()
-                            if not completed_val or completed_val == "nan":
-                                continue
-                            
-                            existing_hashes.add(unique_row_hash(r))
-                            # If row needs PDF, add to rows_by_year for processing
-                            report_dl = str(r.get("PDF report downloaded", "")).strip()
-                            if not report_dl or report_dl in ("", "nan"):
-                                try:
-                                    yr = datetime.strptime(completed_val, "%d/%m/%Y").year
-                                except (ValueError, TypeError):
-                                    continue  # Skip rows with unparseable dates
-                                if yr not in rows_by_year:
-                                    rows_by_year[yr] = []
-                                rows_by_year[yr].append(r.to_dict())
-                                pdf_resume_count += 1
-                logging.info(f"Loaded {len(existing_hashes)} existing hashes from Excel files")
-                if pdf_resume_count > 0:
-                    logging.info(f"Found {pdf_resume_count} existing rows needing PDF download (resuming)")
-                
-                # Process each page
-                for page_num in range(1, total_pages + 1):
-                    logging.info(f"Processing page {page_num}/{total_pages}")
-                    
-                    # Scrape table on current page
-                    new_rows = parse_results_table(driver, existing_hashes, self.col_map)
-                    if new_rows:
-                        # Group rows by year based on completion date
-                        for row in new_rows:
-                            completed_date = row.get("Completed", "")
-                            try:
-                                year = datetime.strptime(completed_date, "%d/%m/%Y").year
-                            except (ValueError, TypeError):
-                                year = datetime.now().year  # Fallback to current year
-                            
-                            if year not in rows_by_year:
-                                rows_by_year[year] = []
-                            rows_by_year[year].append(row)
-                            existing_hashes.add(unique_row_hash(row))
-                        
-                        logging.info(f"Found {len(new_rows)} new rows from page {page_num}")
-                        self.stats.new_rows_added += len(new_rows)
-                        
-                        # Save scraped rows to Excel immediately (before PDF processing)
-                        for yr in rows_by_year:
-                            self._save_year_to_excel(yr, rows_by_year)
-                    else:
-                        logging.info(f"No new rows found on page {page_num}")
-                    
-                    # Collect all rows from rows_by_year for PDF processing
-                    all_current_rows = []
-                    for year_rows in rows_by_year.values():
-                        all_current_rows.extend(year_rows)
-                    
-                    if all_current_rows:
-                        result_df = pd.DataFrame(all_current_rows)
-                        
-                        # Get rows needing PDF processing: missing PDF report downloaded timestamp
-                        no_dl = (result_df["PDF report downloaded"].isnull()) | (result_df["PDF report downloaded"] == "")
-                        all_pdf_needed = result_df[no_dl]
-                        
-                        # Process all rows needing PDFs via web UI
-                        for idx, row in all_pdf_needed.iterrows():
-                            try:
-                                # Skip rows with invalid core fields
-                                completed = str(row.get("Completed", "")).strip()
-                                if not completed or completed == "nan":
-                                    continue
-                                
-                                # Try to select the row - if it's not on this page, skip it
-                                if not select_table_row(driver, row):
-                                    continue  # Row not on this page, skip
-                                
-                                logging.info(f"Processing PDF for: {row['First name']} {row['Last name']} ({row['Test Name']})")
-                                click_candidate_report_button(driver)
-                                time.sleep(2)
-                                html = driver.page_source
-                                file_name = extract_pdf_filename_from_html(html)
-                                if file_name:
-                                    pdf_url = f"https://evolve.cityandguilds.com/secureassess/CustomerData/Evolve/DocumentStore/{file_name}"
-                                    logging.info(f"PDF URL extracted: {pdf_url}")
-                                    # Download the PDF immediately
-                                    completed = row["Completed"]
-                                    target_dir = make_report_folder_path(completed)
-                                    target_name = report_filename(row)
-                                    save_path = os.path.join(target_dir, target_name)
-                                    
-                                    # Check if PDF already exists on disk
-                                    if os.path.exists(save_path):
-                                        logging.info(f"PDF exists on disk, stamping timestamp")
-                                    else:
-                                        r = requests.get(pdf_url, stream=True)
-                                        if r.status_code == 200:
-                                            with open(save_path, 'wb') as f:
-                                                for chunk in r.iter_content(10240):
-                                                    f.write(chunk)
-                                            logging.info(f"PDF downloaded and saved to {save_path}")
-                                            self.stats.pdfs_downloaded += 1
-                                        else:
-                                            logging.warning(f"Failed to download PDF for idx={idx}. Status: {r.status_code}")
-                                            continue
-                                    
-                                    dl_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                                    result_df.at[idx, "PDF report downloaded"] = dl_time
-                                    all_current_rows[idx]["PDF report downloaded"] = dl_time
-                                else:
-                                    logging.warning("No PDF file name found! Skipping.")
-                                
-                                # Incremental save after each PDF processed (silent to avoid log spam)
-                                row_year = datetime.strptime(row["Completed"], "%d/%m/%Y").year
-                                self._save_year_to_excel(row_year, rows_by_year, silent=True)
-
-                                # Navigate back to results tab (stay on same page)
-                                driver.switch_to.default_content()
-                                results_tab = safe_find(driver, By.XPATH, "//a[@href='#TestAdministration/Results']")
-                                results_tab.click()
-                                time.sleep(3)
-                                switch_to_results_iframe(driver)
-                                time.sleep(2)  # Wait for iframe to load, we're still on the same page
-                            except Exception as e:
-                                logging.error(f"Error processing row idx={idx}: {e}")
-                                self.stats.errors_encountered += 1
-                                try:
-                                    driver.switch_to.default_content()
-                                    goto_results_tab(driver)
-                                    switch_to_results_iframe(driver)
-                                    time.sleep(2)
-                                except Exception as ex:
-                                    logging.error(f"Failed to recover after error: {ex}")
-                                    break
-                    
-                    # Move to next page (if not last) - MUST be at end of loop
-                    if page_num < total_pages:
-                        if not click_next_page(driver):
-                            logging.warning(f"Failed to navigate to page {page_num + 1}")
-                            break
-                    
-                # Final save for all years (logs row counts)
-                for year in rows_by_year:
-                    self._save_year_to_excel(year, rows_by_year)
-
-                logging.info(f"All done for account {username}.")
+                self._process_account(driver, username, password)
                 self.stats.accounts_processed += 1
             except Exception as e:
                 logging.error(f"Error processing account {username}: {e}")
                 self.stats.errors_encountered += 1
             finally:
-                driver.quit()
-                logging.info("Chrome closed for this account.\n")
+                try:
+                    driver.quit()
+                except Exception:
+                    pass
+                logging.info("Chrome closed for this account\n")
         return self.stats
+
+    def _process_account(self, driver, username, password):
+        """Login, set filters, scrape all pages, and download PDFs for one account."""
+        login(driver, username, password)
+        switch_to_results_iframe(driver)
+        reset_and_refresh(driver)
+
+        # Set date filter start to 1st of previous month
+        if not set_date_filter_to_previous_month_start(driver):
+            logging.warning("Date filter may not have been set correctly")
+
+        # Get total pages
+        total_pages = get_total_pages(driver)
+        logging.info(f"Found {total_pages} page(s) to scrape")
+
+        # Build hash set from all existing year Excel files to prevent duplicates
+        existing_hashes, rows_by_year, _ = load_all_existing_data()
+
+        # Process each page
+        for page_num in range(1, total_pages + 1):
+            logging.info(f"Processing page {page_num}/{total_pages}")
+
+            # Scrape table and group new rows by year
+            self._scrape_page(driver, page_num, existing_hashes, rows_by_year)
+
+            # Download PDFs for all rows that still need them
+            self._process_page_pdfs(driver, rows_by_year)
+
+            # Move to next page (if not last) - MUST be at end of loop
+            if page_num < total_pages:
+                if not click_next_page(driver):
+                    logging.warning(f"Failed to navigate to page {page_num + 1}")
+                    break
+
+        # Final save for all years (logs row counts)
+        for year in rows_by_year:
+            save_year_to_excel(year, rows_by_year)
+
+        logging.info(f"All done for account {username}")
+
+    def _scrape_page(self, driver, page_num, existing_hashes, rows_by_year):
+        """Scrape the current results page and group new rows by year."""
+        new_rows = parse_results_table(driver, existing_hashes)
+        if new_rows:
+            for row in new_rows:
+                completed_date = row.get("Completed", "")
+                try:
+                    year = datetime.strptime(completed_date, "%d/%m/%Y").year
+                except (ValueError, TypeError):
+                    year = datetime.now().year  # Fallback to current year
+
+                if year not in rows_by_year:
+                    rows_by_year[year] = []
+                rows_by_year[year].append(row)
+                existing_hashes.add(unique_row_hash(row))
+
+            logging.info(f"Found {len(new_rows)} new rows from page {page_num}")
+            self.stats.new_rows_added += len(new_rows)
+
+            # Save scraped rows to Excel immediately (before PDF processing)
+            for yr in rows_by_year:
+                save_year_to_excel(yr, rows_by_year)
+        else:
+            logging.info(f"No new rows found on page {page_num}")
+
+    def _process_page_pdfs(self, driver, rows_by_year):
+        """Download PDFs for all rows across all years that still need them."""
+        pdf_needed = [
+            row for year_rows in rows_by_year.values()
+            for row in year_rows
+            if not row.get("PDF report save time")
+        ]
+
+        if not pdf_needed:
+            return
+
+        for row in pdf_needed:
+            try:
+                completed = str(row.get("Completed", "")).strip()
+                if not completed:
+                    continue
+
+                # Try to select the row - if it's not on this page, skip it
+                if not select_table_row(driver, row):
+                    continue
+
+                logging.info(f"Processing PDF for: {row['First name']} {row['Last name']} ({row['Test Name']})")
+                click_candidate_report_button(driver)
+                html = driver.page_source
+                file_name = extract_pdf_filename_from_html(html)
+                if file_name:
+                    pdf_url = f"{DOCUMENT_STORE_URL}{file_name}"
+                    downloaded = self._download_pdf(pdf_url, row, completed)
+
+                    if downloaded:
+                        dl_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        row["PDF report save time"] = dl_time
+                        row_year = datetime.strptime(row["Completed"], "%d/%m/%Y").year
+                        save_year_to_excel(row_year, rows_by_year, silent=True)
+                else:
+                    logging.warning("No PDF file name found, skipping")
+
+                navigate_to_results(driver)
+            except Exception as e:
+                logging.error(f"Error processing PDF for {row.get('First name', '?')} {row.get('Last name', '?')}: {e}")
+                self.stats.errors_encountered += 1
+                try:
+                    navigate_to_results(driver)
+                except Exception as ex:
+                    logging.error(f"Failed to recover after error: {ex}")
+                    break
+
+    def _download_pdf(self, pdf_url, row, completed):
+        """Download a single PDF. Returns True if downloaded or already on disk."""
+        target_dir = make_report_folder_path(completed)
+        target_name = report_filename(row)
+        save_path = os.path.join(target_dir, target_name)
+
+        if os.path.exists(save_path):
+            logging.info(f"PDF already on disk, updating timestamp")
+            return True
+
+        resp = requests.get(pdf_url, stream=True, timeout=(10, 30))
+        try:
+            if resp.status_code == 200:
+                with open(save_path, 'wb') as f:
+                    for chunk in resp.iter_content(10240):
+                        f.write(chunk)
+                logging.info(f"PDF saved: {target_name}")
+                self.stats.pdfs_downloaded += 1
+                return True
+            else:
+                logging.warning(f"Failed to download PDF, status: {resp.status_code}")
+                return False
+        finally:
+            resp.close()

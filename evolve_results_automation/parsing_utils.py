@@ -35,16 +35,7 @@ def unique_row_hash(row):
 
 def extract_pdf_filename_from_html(html):
     """Extract the PDF filename from HTML content."""
-    match = re.search(r'([a-f0-9\-]{36}\.pdf)', html)
+    match = re.search(r'([a-f0-9\-]{36}\.pdf)', html, re.IGNORECASE)
     if match:
         return match.group(1)
     return None
-
-def get_column_map():
-    """Return the column mapping dictionary for renaming columns."""
-    return {
-        "Downloaded At": "Scraping date/time",
-        "Report Downloaded At": "PDF report downloaded",
-        "E-Certificate Sent": "E-Certificate sent",
-        "Certificate Issued": "Certificate"
-    }

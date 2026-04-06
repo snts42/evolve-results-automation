@@ -8,6 +8,7 @@ import os
 import re
 import glob
 import json
+import time
 import threading
 import queue
 import webbrowser
@@ -15,7 +16,7 @@ from datetime import datetime
 import customtkinter as ctk
 from tkinter import messagebox
 
-from .config import ENCRYPTED_CREDENTIALS_FILE, BASE_DIR
+from .config import ENCRYPTED_CREDENTIALS_FILE, BASE_DIR, get_excel_file_for_year, get_reports_base_for_year, get_logs_base_for_year
 from .secure_credentials import SecureCredentialManager
 
 
@@ -24,10 +25,8 @@ from .secure_credentials import SecureCredentialManager
 # =============================================================================
 
 APP_TITLE    = "E-volve SecureAssess Automation"
-APP_VER      = "v1.0.0"
+APP_VER      = "v1.1.0"
 AUTHOR       = "Alex Santonastaso"
-AUTHOR_HANDLE = "snts42"
-GITHUB_URL   = "https://github.com/snts42"
 REPO_URL     = "https://github.com/snts42/evolve-results-automation"
 ISSUES_URL   = "https://github.com/snts42/evolve-results-automation/issues"
 KOFI_URL     = "https://ko-fi.com/alexsantonastaso"
@@ -51,16 +50,14 @@ TEXT_DIM  = "#9999AA"   # placeholder / disabled
 
 # Semantic colours
 SUCCESS        = "#2E7D32"
-SUCCESS_BG     = "#E8F5E9"
 DANGER         = "#C62828"
 DANGER_HOVER   = "#B71C1C"
 DANGER_BG      = "#FFEBEE"
 DANGER_LIGHT   = "#FFCDD2"
 AMBER          = "#E65100"
-AMBER_HOVER    = "#BF360C"
 
 # -- Spacing ------------------------------------------------------------------
-S2=2; S4=4; S6=6; S8=8; S10=10; S12=12; S16=16; S20=20; S24=24; S32=32
+S2=2; S4=4; S6=6; S8=8; S10=10; S12=12; S16=16; S20=20; S32=32
 
 # -- Font detection -----------------------------------------------------------
 def _detect_font():
@@ -90,7 +87,7 @@ class EvolveGUI:
     """Single-page GUI - light mode, City & Guilds red brand colours."""
 
     _W = {
-        "login":0.10,"navigate":0.08,"iframe":0.04,"refresh":0.03,
+        "login":0.20,"refresh":0.05,
         "filter":0.10,"hashes":0.05,"scrape":0.40,"pdfs":0.15,"close":0.05,
     }
 
@@ -101,7 +98,7 @@ class EvolveGUI:
             import ctypes
             ctypes.windll.shcore.SetProcessDpiAwareness(2)
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
-                "evolve.secureassess.automation.1.0")
+                "evolve.secureassess.automation")
         except Exception:
             pass
 
@@ -112,17 +109,16 @@ class EvolveGUI:
         self.master_password = None
         self.automation_thread = None
         self.log_queue      = queue.Queue()
-        self._authenticated = False
         self._read_only     = False
         self._log_handler   = None
         self._settings_win  = None
         self._help_win      = None
+        self._dd_popup      = None
 
         self._total_accounts = 0
         self._done_accounts  = 0
         self._acct_progress  = 0.0
         self._acct_pages     = 1
-        self._acct_cur_page  = 0
 
         self.root = ctk.CTk()
         self.root.title(f"{APP_TITLE} - Unofficial Tool")
@@ -143,7 +139,7 @@ class EvolveGUI:
         self.root.update()
         self._set_win32_icon()
 
-    def _set_win32_icon(self):
+    def _set_win32_icon(self, win=None):
         """Use Windows API to set correct-size icons for title bar + taskbar."""
         if not os.path.exists(ICO_PATH):
             return
@@ -162,7 +158,8 @@ class EvolveGUI:
             hicon_small = u32.LoadImageW(
                 None, ico, 1, small_sz, small_sz, LR_LOADFROMFILE)
 
-            hwnd = u32.GetParent(self.root.winfo_id())
+            target = win or self.root
+            hwnd = u32.GetParent(target.winfo_id())
             if hicon_big:
                 u32.SendMessageW(hwnd, 0x0080, 1, hicon_big)    # ICON_BIG
             if hicon_small:
@@ -388,7 +385,6 @@ class EvolveGUI:
 
     # ------------------------------------------------------- unlock
     def _unlock(self, first_time=False):
-        self._authenticated = True
         self._read_only = False
         self._lock.destroy()
         self._build_main_ui()
@@ -428,7 +424,7 @@ class EvolveGUI:
         hdr.pack(fill="x", padx=S16, pady=(S8, 0))
 
         ctk.CTkLabel(hdr, text="AUTOMATION",
-                     font=self._f(10, "bold"), text_color=TEXT_DIM
+                     font=self._f(10, "bold"), text_color=CG_RED
                      ).pack(side="left")
 
         ctk.CTkButton(
@@ -526,8 +522,6 @@ class EvolveGUI:
             self.status_lbl.configure(
                 text="Read-only mode - unlock to run automation",
                 text_color=TEXT_MID)
-            self.progress_bar.configure(fg_color=ELEVATED, progress_color=CG_RED)
-            self._prog_shown = True
 
         # Last run label (in ctrl_card, independent of progress bar)
         self._results_lbl = ctk.CTkLabel(
@@ -545,7 +539,7 @@ class EvolveGUI:
         inner.pack(fill="x", padx=S16, pady=S10)
 
         ctk.CTkLabel(inner, text="QUICK OPEN",
-                     font=self._f(10, "bold"), text_color=TEXT_DIM,
+                     font=self._f(10, "bold"), text_color=CG_RED,
                      anchor="w").pack(anchor="w", pady=(0, S4))
 
         btn_row = ctk.CTkFrame(inner, fg_color="transparent")
@@ -571,7 +565,7 @@ class EvolveGUI:
         lh.pack(fill="x", padx=S16, pady=(S8, S4))
         ctk.CTkLabel(lh, text="AUTOMATION LOGS",
                      font=self._f(10,"bold"),
-                     text_color=TEXT_DIM).pack(side="left")
+                     text_color=CG_RED).pack(side="left")
 
         self.log_text = ctk.CTkTextbox(
             log_card, wrap="word", state="disabled",
@@ -629,6 +623,7 @@ class EvolveGUI:
         if os.path.exists(ICO_PATH):
             try:
                 win.after(200, lambda: win.iconbitmap(ICO_PATH))
+                win.after(250, lambda: self._set_win32_icon(win))
             except Exception:
                 pass
 
@@ -641,7 +636,7 @@ class EvolveGUI:
 
         # -- AUTOMATION SETTINGS (top) --
         ctk.CTkLabel(inner, text="AUTOMATION SETTINGS",
-                     font=self._f(10, "bold"), text_color=TEXT_DIM,
+                     font=self._f(10, "bold"), text_color=CG_RED,
                      anchor="w").pack(anchor="w", pady=(0, S4))
         ctk.CTkSwitch(
             inner, text="Show browser during automation",
@@ -655,7 +650,7 @@ class EvolveGUI:
 
         # -- ADD CREDENTIAL --
         ctk.CTkLabel(inner, text="ADD CREDENTIAL",
-                     font=self._f(10, "bold"), text_color=TEXT_DIM,
+                     font=self._f(10, "bold"), text_color=CG_RED,
                      anchor="w").pack(anchor="w", pady=(0, S2))
         ctk.CTkLabel(inner,
                      text="E-volve SecureAssess logins - AES-256 encrypted locally.",
@@ -677,12 +672,15 @@ class EvolveGUI:
 
         # -- SAVED CREDENTIALS --
         ctk.CTkLabel(inner, text="SAVED CREDENTIALS",
-                     font=self._f(10, "bold"), text_color=TEXT_DIM
+                     font=self._f(10, "bold"), text_color=CG_RED
                      ).pack(anchor="w", pady=(0, S4))
 
-        acc_scroll = ctk.CTkFrame(inner, fg_color="transparent",
-                                   corner_radius=0)
+        acc_scroll = ctk.CTkScrollableFrame(
+            inner, fg_color="transparent", corner_radius=0,
+            scrollbar_button_color=BORDER,
+            scrollbar_button_hover_color=TEXT_DIM)
         acc_scroll.pack(fill="both", expand=True)
+        acc_scroll._scrollbar.grid_remove()
 
         def refresh_list():
             for w in acc_scroll.winfo_children():
@@ -691,6 +689,7 @@ class EvolveGUI:
                 creds = self.manager.list_credentials(
                     master_password=self.master_password)
                 if not creds:
+                    acc_scroll._scrollbar.grid_remove()
                     ctk.CTkLabel(acc_scroll,
                                  text="No accounts saved yet.",
                                  font=self._f(12), text_color=TEXT_DIM
@@ -713,6 +712,10 @@ class EvolveGUI:
                     rbtn.pack(side="right", padx=S8)
                     self._bind_settings_remove(uname, rbtn, refresh_list,
                                                status_lbl)
+                if len(creds) > 3:
+                    acc_scroll._scrollbar.grid()
+                else:
+                    acc_scroll._scrollbar.grid_remove()
             except Exception as e:
                 ctk.CTkLabel(acc_scroll, text=f"Error: {e}",
                              font=self._f(12), text_color=DANGER
@@ -789,6 +792,7 @@ class EvolveGUI:
         if os.path.exists(ICO_PATH):
             try:
                 win.after(200, lambda: win.iconbitmap(ICO_PATH))
+                win.after(250, lambda: self._set_win32_icon(win))
             except Exception:
                 pass
 
@@ -826,29 +830,48 @@ class EvolveGUI:
         top = ctk.CTkFrame(win, fg_color="transparent")
         top.pack(fill="both", expand=True, padx=S16, pady=S12)
 
-        ctk.CTkLabel(top, text="Getting Started",
-                     font=self._f(16, "bold"), text_color=TEXT,
-                     anchor="w").pack(anchor="w", pady=(0, S12))
+        ctk.CTkLabel(top,
+                     text="Automatically downloads results and PDF reports "
+                          "from E-volve SecureAssess.",
+                     font=self._f(11), text_color=TEXT_MID, anchor="w",
+                     justify="left", wraplength=390
+                     ).pack(anchor="w", pady=(0, S8))
+
+        ctk.CTkLabel(top, text="GETTING STARTED",
+                     font=self._f(10, "bold"), text_color=CG_RED,
+                     anchor="w").pack(anchor="w", pady=(0, S4))
 
         steps = (
-            "1. Set a master password on first launch.",
-            "2. Open Settings to add your E-volve SecureAssess login(s).",
-            "3. Click Run Automation on the main screen.",
-            "4. Results are saved to Excel and PDF reports are downloaded, organised by year.",
-            "5. Close Excel before running automation again.",
+            "1. Keep this tool in its own folder. It saves data alongside itself.",
+            "2. Set a master password, then add your logins in Settings.",
+            "3. Click Run Automation. Results and PDF reports are saved by year.",
         )
         for step in steps:
             ctk.CTkLabel(top, text=step, font=self._f(12),
                          text_color=TEXT_MID, anchor="w",
                          justify="left", wraplength=390
-                         ).pack(anchor="w", pady=(0, S6))
+                         ).pack(anchor="w", pady=(0, S4))
+
+        ctk.CTkLabel(top, text="TROUBLESHOOTING",
+                     font=self._f(10, "bold"), text_color=CG_RED,
+                     anchor="w").pack(anchor="w", pady=(S6, S4))
+
+        tips = (
+            "Close Excel before running and do not modify the spreadsheet structure. Open or altered files will cause errors.",
+            "Most errors are caused by E-volve loading slowly or an unstable connection. Enable 'Show browser' in Settings and check logs for details.",
+        )
+        for tip in tips:
+            ctk.CTkLabel(top, text=f"-  {tip}", font=self._f(12),
+                         text_color=TEXT_MID, anchor="w",
+                         justify="left", wraplength=390
+                         ).pack(anchor="w", pady=(0, S10))
 
     # ========================================================= FILE HELPERS
     def _open_current_excel(self):
-        year = str(datetime.now().year)
-        excel = os.path.join(BASE_DIR, year, "exam_results.xlsx")
-        if os.path.exists(excel):
-            self._open_path(excel)
+        year = datetime.now().year
+        path = get_excel_file_for_year(year)
+        if os.path.exists(path):
+            self._open_path(path)
         else:
             messagebox.showinfo(
                 "Not Found",
@@ -856,8 +879,9 @@ class EvolveGUI:
                 "Run automation first to generate results.")
 
     def _open_current_folder(self, subfolder):
-        year = str(datetime.now().year)
-        path = os.path.join(BASE_DIR, year, subfolder)
+        year = datetime.now().year
+        lookup = {"reports": get_reports_base_for_year, "logs": get_logs_base_for_year}
+        path = lookup[subfolder](year)
         if os.path.exists(path):
             self._open_path(path)
         else:
@@ -885,7 +909,7 @@ class EvolveGUI:
                 errs = data.get("errors", 0)
                 self._results_lbl.configure(
                     text=(f"Last run: {ts}  |  {accts} account(s), "
-                          f"{rows} new rows, {pdfs} PDFs, {errs} error(s)"),
+                          f"{rows} new results, {pdfs} PDF reports, {errs} error(s)"),
                     text_color=TEXT_MID)
                 self._results_lbl.pack(fill="x", padx=S16, pady=(S4, S8))
         except Exception:
@@ -909,13 +933,67 @@ class EvolveGUI:
     # ========================================================= ACCOUNT DROPDOWN
     def _show_account_menu(self):
         import tkinter as tk
-        menu = tk.Menu(self.root, tearoff=0, font=(FONT, 11))
+
+        # Toggle: close if already open
+        if self._dd_popup:
+            try:
+                if self._dd_popup.winfo_exists():
+                    self._close_account_menu()
+                    return
+            except Exception:
+                self._dd_popup = None
+
+        # Mark trigger as active
+        self._dd_frame.configure(border_color=TEXT_DIM, fg_color=ELEVATED)
+        self._dd_arrow.configure(text="\u25B4")
+
+        popup = tk.Toplevel(self.root)
+        popup.overrideredirect(True)
+        popup.configure(bg=BORDER)
+        self._dd_popup = popup
+
+        frame = ctk.CTkFrame(popup, fg_color=SURFACE, corner_radius=0,
+                              border_width=1, border_color=BORDER)
+        frame.pack(fill="both", expand=True)
+
+        def pick(v):
+            self._select_account(v)
+            self._close_account_menu()
+
         for val in self._account_values:
-            menu.add_command(
-                label=val, command=lambda v=val: self._select_account(v))
+            ctk.CTkButton(
+                frame, text=val, anchor="w",
+                font=self._f(12), fg_color="transparent",
+                hover_color=ELEVATED, text_color=TEXT,
+                border_width=0, height=32, corner_radius=6,
+                command=lambda v=val: pick(v)
+            ).pack(fill="x", padx=S4, pady=S2)
+
+        popup.update_idletasks()
         x = self._dd_frame.winfo_rootx()
-        y = self._dd_frame.winfo_rooty() + self._dd_frame.winfo_height()
-        menu.post(x, y)
+        y = self._dd_frame.winfo_rooty() + self._dd_frame.winfo_height() + 2
+        w = self._dd_frame.winfo_width()
+        h = frame.winfo_reqheight()
+        popup.geometry(f"{w}x{h}+{x}+{y}")
+
+        popup.after(50, popup.focus_set)
+        popup.bind("<FocusOut>",
+                   lambda e: self.root.after(150, self._close_account_menu))
+
+    def _close_account_menu(self):
+        popup = self._dd_popup
+        if popup:
+            try:
+                if popup.winfo_exists():
+                    popup.destroy()
+            except Exception:
+                pass
+            self._dd_popup = None
+        try:
+            self._dd_frame.configure(border_color=BORDER, fg_color=SURFACE)
+            self._dd_arrow.configure(text="\u25BE")
+        except Exception:
+            pass
 
     def _select_account(self, value):
         self.account_var.set(value)
@@ -962,6 +1040,8 @@ class EvolveGUI:
         locked = []
         for p in glob.glob(os.path.join(BASE_DIR, "*", "exam_results.xlsx")):
             year = os.path.basename(os.path.dirname(p))
+            if not re.match(r'^\d{4}$', year):
+                continue
             # Check for Excel's hidden ~$ lock file (fast path)
             lock_file = os.path.join(os.path.dirname(p), "~$exam_results.xlsx")
             if os.path.exists(lock_file):
@@ -1003,6 +1083,7 @@ class EvolveGUI:
         self._total_accounts = 1 if selected else len(creds)
         self._done_accounts  = 0
         self._acct_progress  = 0.0
+        self._run_start_time = time.time()
 
         self.log_text.configure(state="normal")
         self.log_text.delete("1.0","end")
@@ -1063,39 +1144,43 @@ class EvolveGUI:
             pass
         if self.automation_thread and self.automation_thread.is_alive():
             self.root.after(80, self._poll_queue)
+        else:
+            # Final drain: catch messages the thread put just before dying
+            try:
+                while True:
+                    kind, data = self.log_queue.get_nowait()
+                    if kind == "done":
+                        self._on_complete(data)
+                    elif kind == "error":
+                        self._on_error(data)
+                    elif kind == "log":
+                        self._log(data)
+            except queue.Empty:
+                pass
 
     # ----------------------------------------------- progress parsing
     def _update_progress(self, msg):
         W = self._W
         if "Starting for account" in msg:
-            self._acct_progress = 0.0; self._acct_cur_page = 0
+            self._acct_progress = 0.0
             self._acct_pages = 1; self._push_progress()
             self._set_status(self._stat("Logging in..."), CG_RED)
         elif "Login submitted" in msg:
             self._acct_progress = W["login"]; self._push_progress()
             self._set_status(self._stat("Loading results..."), CG_RED)
-        elif "Results tab opened" in msg:
-            self._acct_progress = W["login"]+W["navigate"]
-            self._push_progress()
-        elif "Switched to Results iframe" in msg:
-            self._acct_progress = W["login"]+W["navigate"]+W["iframe"]
-            self._push_progress()
-        elif "Refresh button clicked" in msg:
-            self._acct_progress = (W["login"]+W["navigate"]+W["iframe"]
-                                   +W["refresh"])
+        elif "Refreshing table" in msg:
+            self._acct_progress = W["login"]+W["refresh"]
             self._push_progress()
             self._set_status(self._stat("Applying filters..."), CG_RED)
         elif "Date filter updated" in msg:
-            self._acct_progress = (W["login"]+W["navigate"]+W["iframe"]
-                                   +W["refresh"]+W["filter"])
+            self._acct_progress = W["login"]+W["refresh"]+W["filter"]
             self._push_progress()
             self._set_status(self._stat("Loading data..."), CG_RED)
         elif "page(s) to scrape" in msg:
             m = re.search(r"Found (\d+) page", msg)
             if m:
                 self._acct_pages = max(int(m.group(1)), 1)
-            base = (W["login"]+W["navigate"]+W["iframe"]
-                    +W["refresh"]+W["filter"]+W["hashes"])
+            base = W["login"]+W["refresh"]+W["filter"]+W["hashes"]
             self._acct_progress = base; self._push_progress()
             self._set_status(
                 self._stat(f"Scraping {self._acct_pages} page(s)..."),
@@ -1103,16 +1188,14 @@ class EvolveGUI:
         elif "Processing page" in msg:
             m = re.search(r"Processing page (\d+)/(\d+)", msg)
             if m:
-                pg = int(m.group(1)); self._acct_cur_page = pg
-                base = (W["login"]+W["navigate"]+W["iframe"]
-                        +W["refresh"]+W["filter"]+W["hashes"])
+                pg = int(m.group(1))
+                base = W["login"]+W["refresh"]+W["filter"]+W["hashes"]
                 self._acct_progress = base + W["scrape"]*(pg/self._acct_pages)
                 self._push_progress()
                 self._set_status(
                     self._stat(f"Page {pg}/{self._acct_pages}"), CG_RED)
         elif "Processing PDF for" in msg:
-            base = (W["login"]+W["navigate"]+W["iframe"]
-                    +W["refresh"]+W["filter"]+W["hashes"]+W["scrape"])
+            base = W["login"]+W["refresh"]+W["filter"]+W["hashes"]+W["scrape"]
             self._acct_progress = min(base+W["pdfs"]*0.5, 0.95)
             self._push_progress()
             self._set_status(self._stat("Downloading PDFs..."), CG_RED)
@@ -1141,18 +1224,21 @@ class EvolveGUI:
                                    text_color=SURFACE)
         self._set_progress(1.0)
         self._set_status("Completed", SUCCESS)
+        elapsed = int(time.time() - self._run_start_time)
+        mins, secs = divmod(elapsed, 60)
+        dur = f"{mins}m {secs}s" if mins else f"{secs}s"
         sep = "-" * 48
-        self._log(f"\n{sep}\n  COMPLETED\n"
-                  f"  Accounts : {stats.accounts_processed}\n"
-                  f"  New rows : {stats.new_rows_added}\n"
-                  f"  PDFs     : {stats.pdfs_downloaded}\n"
-                  f"  Errors   : {stats.errors_encountered}\n{sep}")
+        self._log(f"\n{sep}\n  COMPLETED  ({dur})\n"
+                  f"  Accounts    : {stats.accounts_processed}\n"
+                  f"  New results : {stats.new_rows_added}\n"
+                  f"  PDF reports : {stats.pdfs_downloaded}\n"
+                  f"  Errors      : {stats.errors_encountered}\n{sep}")
 
         # Update results summary
         self._results_lbl.configure(
             text=(f"Completed - {stats.accounts_processed} account(s), "
-                  f"{stats.new_rows_added} new rows, "
-                  f"{stats.pdfs_downloaded} PDFs, "
+                  f"{stats.new_rows_added} new results, "
+                  f"{stats.pdfs_downloaded} PDF reports, "
                   f"{stats.errors_encountered} error(s)"),
             text_color=SUCCESS)
         if not self._results_lbl.winfo_ismapped():

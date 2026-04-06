@@ -110,12 +110,12 @@ class SecureCredentialManager:
             
             # Check if anything was actually removed
             if len(filtered) == initial_count:
-                logging.info(f"Credential for username '{username}' not found.")
+                logging.info(f"Credential for username '{username}' not found")
                 return False
             
             # Save the updated credentials
             self._save_credentials(filtered, master_password)
-            logging.info(f"Credential for '{username}' removed.")
+            logging.info(f"Credential for '{username}' removed")
             return True
             
         except Exception as e:
@@ -146,13 +146,13 @@ class SecureCredentialManager:
             
             # Check for duplicate username
             if any(cred.get('username') == username for cred in credentials):
-                logging.info(f"Credential for username '{username}' already exists.")
+                logging.info(f"Credential for username '{username}' already exists")
                 return False
                 
             # Add new credential and save
             credentials.append({'username': username, 'password': password})
             self._save_credentials(credentials, master_password)
-            logging.info(f"Credential for '{username}' added.")
+            logging.info(f"Credential for '{username}' added")
             return True
             
         except Exception as e:
