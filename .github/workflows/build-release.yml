@@ -32,15 +32,45 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
-      - name: Build exe with PyInstaller
+      - name: Build with PyInstaller (folder mode)
         run: |
-          pyinstaller --noconfirm --onefile --windowed `
+          pyinstaller --noconfirm --onedir --windowed `
             --name "EvolveResultsAutomation" `
+            --contents-directory "_internal" `
             --icon "evolve_results_automation/app.ico" `
             --add-data "evolve_results_automation/app.ico;evolve_results_automation" `
             --hidden-import "customtkinter" `
-            --collect-all "customtkinter" `
+            --collect-data "customtkinter" `
+            --exclude-module "selenium.webdriver.common.devtools" `
+            --exclude-module "numpy" `
+            --exclude-module "PIL" `
+            --exclude-module "Pillow" `
+            --exclude-module "lxml" `
+            --exclude-module "psutil" `
+            --exclude-module "yaml" `
+            --exclude-module "pandas" `
+            --exclude-module "cryptography" `
             evolve_results_automation/__main__.py
+
+      - name: Remove unused Selenium platform binaries
+        shell: pwsh
+        run: |
+          $internal = "dist/EvolveResultsAutomation/_internal"
+          $patterns = @(
+            "$internal/selenium/webdriver/common/macos",
+            "$internal/selenium/webdriver/common/linux"
+          )
+          foreach ($p in $patterns) {
+            if (Test-Path $p) {
+              Remove-Item -Recurse -Force $p
+              Write-Host "Removed $p"
+            }
+          }
+
+      - name: Zip release folder
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "dist/EvolveResultsAutomation" -DestinationPath "dist/EvolveResultsAutomation.zip"
 
       - name: Extract tag annotation
         shell: pwsh
@@ -64,6 +94,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           body_path: release_body.md
-          files: dist/EvolveResultsAutomation.exe
+          files: dist/EvolveResultsAutomation.zip
           draft: false
           prerelease: false

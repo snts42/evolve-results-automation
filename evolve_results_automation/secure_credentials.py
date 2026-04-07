@@ -1,10 +1,16 @@
 import json
 import os
+import hmac
+import hashlib
 import logging
-import base64
-from cryptography.fernet import Fernet
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+import pyaes
+
+
+# Format: salt(16) + iv(16) + mac(32) + ciphertext(N)
+_SALT_LEN = 16
+_IV_LEN = 16
+_MAC_LEN = 32
+_HEADER_LEN = _SALT_LEN + _IV_LEN + _MAC_LEN
 
 
 class SecureCredentialManager:
@@ -17,23 +23,68 @@ class SecureCredentialManager:
         """
         self.encrypted_file = encrypted_file
         
-    def _derive_key(self, password: str, salt: bytes) -> bytes:
-        """Derive encryption key from password.
+    def _derive_keys(self, password: str, salt: bytes) -> tuple:
+        """Derive AES-256 encryption key and HMAC key from password.
         
         Args:
             password: Master password
             salt: Random salt value
             
         Returns:
-            bytes: Derived encryption key
+            tuple: (aes_key: 32 bytes, hmac_key: 32 bytes)
         """
-        kdf = PBKDF2HMAC(
-            algorithm=hashes.SHA256(),
-            length=32,
-            salt=salt,
-            iterations=100000,
-        )
-        return base64.urlsafe_b64encode(kdf.derive(password.encode()))
+        # Derive 64 bytes: first 32 for AES-256, last 32 for HMAC-SHA256
+        derived = hashlib.pbkdf2_hmac('sha256', password.encode(), salt, 100000, dklen=64)
+        return derived[:32], derived[32:]
+
+    def _encrypt(self, plaintext: bytes, password: str) -> bytes:
+        """Encrypt plaintext with AES-256-CBC + HMAC-SHA256.
+        
+        Returns:
+            bytes: salt(16) + iv(16) + hmac(32) + ciphertext
+        """
+        salt = os.urandom(_SALT_LEN)
+        iv = os.urandom(_IV_LEN)
+        aes_key, hmac_key = self._derive_keys(password, salt)
+
+        # PKCS7 pad and AES-256-CBC encrypt
+        encrypter = pyaes.Encrypter(pyaes.AESModeOfOperationCBC(aes_key, iv=iv))
+        ciphertext = encrypter.feed(plaintext) + encrypter.feed()
+
+        # Authenticate: HMAC-SHA256 over iv + ciphertext
+        mac = hmac.new(hmac_key, iv + ciphertext, hashlib.sha256).digest()
+
+        return salt + iv + mac + ciphertext
+
+    def _decrypt(self, data: bytes, password: str) -> bytes:
+        """Decrypt AES-256-CBC + HMAC-SHA256 data.
+        
+        Returns:
+            bytes: Decrypted plaintext
+            
+        Raises:
+            ValueError: If MAC verification fails or data is malformed
+        """
+        if len(data) < _HEADER_LEN + 16:  # minimum: header + 1 AES block
+            raise ValueError("Invalid encrypted file format")
+
+        salt = data[:_SALT_LEN]
+        iv = data[_SALT_LEN:_SALT_LEN + _IV_LEN]
+        stored_mac = data[_SALT_LEN + _IV_LEN:_HEADER_LEN]
+        ciphertext = data[_HEADER_LEN:]
+
+        aes_key, hmac_key = self._derive_keys(password, salt)
+
+        # Verify HMAC before decrypting (authenticate-then-decrypt)
+        computed_mac = hmac.new(hmac_key, iv + ciphertext, hashlib.sha256).digest()
+        if not hmac.compare_digest(stored_mac, computed_mac):
+            raise ValueError("HMAC verification failed - wrong password or corrupted file")
+
+        # AES-256-CBC decrypt with PKCS7 unpadding
+        decrypter = pyaes.Decrypter(pyaes.AESModeOfOperationCBC(aes_key, iv=iv))
+        plaintext = decrypter.feed(ciphertext) + decrypter.feed()
+
+        return plaintext
     
     def create_empty(self, master_password: str) -> None:
         """Create an empty encrypted credentials file with the given master password.
@@ -63,17 +114,7 @@ class SecureCredentialManager:
             with open(self.encrypted_file, 'rb') as f:
                 data = f.read()
             
-            if len(data) < 16:
-                raise ValueError("Invalid encrypted file format")
-                
-            # Extract salt (first 16 bytes) and encrypted data
-            salt = data[:16]
-            encrypted_data = data[16:]
-            
-            # Derive key and decrypt
-            key = self._derive_key(master_password, salt)
-            fernet = Fernet(key)
-            decrypted_data = fernet.decrypt(encrypted_data)
+            decrypted_data = self._decrypt(data, master_password)
             
             # Parse and normalize credentials
             credentials = json.loads(decrypted_data.decode())
@@ -169,16 +210,11 @@ class SecureCredentialManager:
         Raises:
             ValueError: If encryption or file operations fail
         """
-        salt = os.urandom(16)
-        key = self._derive_key(master_password, salt)
-        fernet = Fernet(key)
+        plaintext = json.dumps(credentials).encode()
+        encrypted_data = self._encrypt(plaintext, master_password)
         
-        # Convert credentials to JSON and encrypt
-        encrypted_data = fernet.encrypt(json.dumps(credentials).encode())
-        
-        # Write salt + encrypted data to file
         with open(self.encrypted_file, 'wb') as f:
-            f.write(salt + encrypted_data)
+            f.write(encrypted_data)
 
     def list_credentials(self, master_password: str = None) -> list:
         """Get all usernames from encrypted file. Returns list of usernames or empty list on error."""

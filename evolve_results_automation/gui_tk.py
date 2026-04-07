@@ -16,7 +16,7 @@ from datetime import datetime
 import customtkinter as ctk
 from tkinter import messagebox
 
-from .config import ENCRYPTED_CREDENTIALS_FILE, BASE_DIR, get_excel_file_for_year, get_reports_base_for_year, get_logs_base_for_year
+from .config import APP_VER, ENCRYPTED_CREDENTIALS_FILE, BASE_DIR, get_excel_file_for_year, get_reports_base_for_year, get_logs_base_for_year
 from .secure_credentials import SecureCredentialManager
 
 
@@ -25,7 +25,7 @@ from .secure_credentials import SecureCredentialManager
 # =============================================================================
 
 APP_TITLE    = "E-volve SecureAssess Automation"
-APP_VER      = "v1.1.0"
+# APP_VER imported from config
 AUTHOR       = "Alex Santonastaso"
 REPO_URL     = "https://github.com/snts42/evolve-results-automation"
 ISSUES_URL   = "https://github.com/snts42/evolve-results-automation/issues"
@@ -51,7 +51,6 @@ TEXT_DIM  = "#9999AA"   # placeholder / disabled
 # Semantic colours
 SUCCESS        = "#2E7D32"
 DANGER         = "#C62828"
-DANGER_HOVER   = "#B71C1C"
 DANGER_BG      = "#FFEBEE"
 DANGER_LIGHT   = "#FFCDD2"
 AMBER          = "#E65100"
@@ -167,6 +166,15 @@ class EvolveGUI:
         except Exception:
             pass
 
+    def _apply_dialog_icon(self, win):
+        """Apply the app icon to a dialog window."""
+        if os.path.exists(ICO_PATH):
+            try:
+                win.after(200, lambda: win.iconbitmap(ICO_PATH))
+                win.after(250, lambda: self._set_win32_icon(win))
+            except Exception:
+                pass
+
     # ================================================================ helpers
     def _f(self, size=14, weight="normal"):
         return ctk.CTkFont(family=FONT, size=size, weight=weight)
@@ -226,18 +234,18 @@ class EvolveGUI:
                      corner_radius=2).pack(fill="x", pady=(0, S20))
 
         ctk.CTkLabel(inner, text="E-volve SecureAssess",
-                     font=self._f(22,"bold"), text_color=TEXT
+                     font=self._f(22,"bold"), text_color=CG_RED
                      ).pack(pady=(0, S4))
         ctk.CTkLabel(inner,
                      text=f"Automation - Unofficial Tool {APP_VER}",
                      font=self._f(12), text_color=TEXT_MID
-                     ).pack(pady=(0, S20))
+                     ).pack(pady=(0, S12))
 
         is_setup = not os.path.exists(ENCRYPTED_CREDENTIALS_FILE)
         msg = ("Create a master password to encrypt your credentials."
                if is_setup else "Enter your master password to continue.")
         ctk.CTkLabel(inner, text=msg, font=self._f(12), text_color=TEXT_MID,
-                     wraplength=360).pack(pady=(0, S16))
+                     wraplength=360).pack(pady=(0, S10))
 
         pw1 = self._entry(inner, placeholder_text="Master password", show="*")
         pw1.pack(fill="x", pady=(0, S10))
@@ -297,7 +305,7 @@ class EvolveGUI:
             ctk.CTkButton(
                 inner, text="View saved results only",
                 font=self._f(11), fg_color="transparent",
-                hover_color=ELEVATED, text_color=TEXT_MID,
+                hover_color=CG_RED_LIGHT, text_color=CG_RED,
                 border_width=0, height=24,
                 command=self._skip_to_read_only
             ).pack(pady=(S4, 0))
@@ -321,7 +329,7 @@ class EvolveGUI:
         ctk.CTkFrame(inner, height=4, fg_color=CG_RED,
                      corner_radius=2).pack(fill="x", pady=(0, S20))
         ctk.CTkLabel(inner, text="Reset Password",
-                     font=self._f(22,"bold"), text_color=TEXT
+                     font=self._f(22,"bold"), text_color=CG_RED
                      ).pack(pady=(0, S12))
         ctk.CTkLabel(inner,
                      text="This deletes the encrypted credentials file and removes "
@@ -332,7 +340,7 @@ class EvolveGUI:
         ctk.CTkLabel(inner,
                      text="Your Excel spreadsheets, PDF reports, and log files "
                           "will NOT be deleted.",
-                     font=self._f(12), text_color=SUCCESS,
+                     font=self._f(12), text_color=CG_RED,
                      wraplength=380, justify="left").pack(pady=(0, S10))
         ctk.CTkLabel(inner, text="This action cannot be undone.",
                      font=self._f(12,"bold"), text_color=DANGER
@@ -361,8 +369,7 @@ class EvolveGUI:
 
         row = ctk.CTkFrame(inner, fg_color="transparent")
         row.pack(fill="x")
-        self._btn_primary(row, "Reset Everything", do_reset,
-                          fg_color=DANGER, hover_color=DANGER_HOVER
+        self._btn_primary(row, "Reset Everything", do_reset
                           ).pack(side="left", fill="x", expand=True, padx=(0, S8))
         self._btn_secondary(row, "Go Back",
                             lambda: (self._lock.destroy(), self._show_lock_screen())
@@ -545,9 +552,9 @@ class EvolveGUI:
         btn_row = ctk.CTkFrame(inner, fg_color="transparent")
         btn_row.pack(fill="x")
 
-        self._excel_btn = self._btn_primary(btn_row, "Excel",
-                          self._open_current_excel,
-                          height=32, width=80)
+        self._excel_btn = self._btn_secondary(btn_row, "Excel",
+                            self._open_current_excel,
+                            height=32, width=80)
         self._excel_btn.pack(side="left", padx=(0, S8))
         self._btn_secondary(btn_row, "Reports",
                             lambda: self._open_current_folder("reports"),
@@ -620,12 +627,7 @@ class EvolveGUI:
         self._settings_win = win
         self._center_dialog(win, w, h)
 
-        if os.path.exists(ICO_PATH):
-            try:
-                win.after(200, lambda: win.iconbitmap(ICO_PATH))
-                win.after(250, lambda: self._set_win32_icon(win))
-            except Exception:
-                pass
+        self._apply_dialog_icon(win)
 
         # Red accent stripe
         ctk.CTkFrame(win, height=3, fg_color=CG_RED,
@@ -789,12 +791,7 @@ class EvolveGUI:
         self._help_win = win
         self._center_dialog(win, w, h)
 
-        if os.path.exists(ICO_PATH):
-            try:
-                win.after(200, lambda: win.iconbitmap(ICO_PATH))
-                win.after(250, lambda: self._set_win32_icon(win))
-            except Exception:
-                pass
+        self._apply_dialog_icon(win)
 
         # Red accent stripe
         ctk.CTkFrame(win, height=3, fg_color=CG_RED,
@@ -1220,19 +1217,14 @@ class EvolveGUI:
     def _on_complete(self, stats):
         self.run_btn.configure(state="normal", text="Run Automation",
                                fg_color=CG_RED, text_color=SURFACE)
-        self._excel_btn.configure(state="normal", fg_color=CG_RED,
-                                   text_color=SURFACE)
+        self._excel_btn.configure(state="normal", fg_color=SURFACE,
+                                   text_color=TEXT)
         self._set_progress(1.0)
         self._set_status("Completed", SUCCESS)
         elapsed = int(time.time() - self._run_start_time)
         mins, secs = divmod(elapsed, 60)
         dur = f"{mins}m {secs}s" if mins else f"{secs}s"
-        sep = "-" * 48
-        self._log(f"\n{sep}\n  COMPLETED  ({dur})\n"
-                  f"  Accounts    : {stats.accounts_processed}\n"
-                  f"  New results : {stats.new_rows_added}\n"
-                  f"  PDF reports : {stats.pdfs_downloaded}\n"
-                  f"  Errors      : {stats.errors_encountered}\n{sep}")
+        self._log(f"Completed in {dur}")
 
         # Update results summary
         self._results_lbl.configure(
@@ -1249,8 +1241,8 @@ class EvolveGUI:
     def _on_error(self, msg):
         self.run_btn.configure(state="normal", text="Run Automation",
                                fg_color=CG_RED, text_color=SURFACE)
-        self._excel_btn.configure(state="normal", fg_color=CG_RED,
-                                   text_color=SURFACE)
+        self._excel_btn.configure(state="normal", fg_color=SURFACE,
+                                   text_color=TEXT)
         self._set_progress(0)
         self._set_status("Failed", DANGER)
         self._log(f"\nERROR: {msg}\n")

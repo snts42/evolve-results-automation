@@ -28,9 +28,9 @@ Everything is organised neatly by year so your records stay tidy.
 
 ### Option 1: Download the app (recommended)
 
-1. Download **`EvolveResultsAutomation.exe`** from the [latest release](https://github.com/snts42/evolve-results-automation/releases/latest)
-2. Place it in a dedicated folder (all files are saved alongside the app)
-3. Run it and create a master password
+1. Download **`EvolveResultsAutomation.zip`** from the [latest release](https://github.com/snts42/evolve-results-automation/releases/latest)
+2. Extract the zip into a dedicated folder (all data is saved alongside the app)
+3. Run **`EvolveResultsAutomation.exe`** and create a master password
 4. Add your E-volve login(s) in **Settings**
 5. Click **Run Automation** and let it work
 
@@ -50,16 +50,18 @@ python -m evolve_results_automation
 All data is organised by exam completion year:
 
 ```
-EvolveResultsAutomation.exe
-credentials.enc
-2026/
-  exam_results.xlsx
-  reports/
-    03 15/
-      John Smith Test Name Pass.pdf
-  logs/
-    03 15/
-      log_2026-03-15_09-30-00.txt
+EvolveResultsAutomation/
+  EvolveResultsAutomation.exe
+  _internal/
+  credentials.enc
+  2026/
+    exam_results.xlsx
+    reports/
+      03 15/
+        John Smith Test Name Pass.pdf
+    logs/
+      03 15/
+        log_2026-03-15_09-30-00.txt
 ```
 
 - **Excel** - one spreadsheet per year with all candidate results, auto-sorted by date
@@ -68,11 +70,11 @@ credentials.enc
 
 ## Is It Secure?
 
-Yes. Your E-volve login credentials are encrypted with **AES-256**, the same standard used by banks. They are protected by a master password you set on first launch.
+Yes. Your E-volve login credentials are encrypted with **AES-256**, the same standard used by banks, and verified with HMAC-SHA256 to prevent tampering. They are protected by a master password you set on first launch.
 
 - No plaintext passwords are ever written to disk
 - The master password is only asked once per session
-- If you forget your master password, delete `credentials.enc` and set a new one
+- If you forget your master password, click **"Forgot password? Reset here"** on the login screen to start fresh
 
 ## Technical Details
 
@@ -81,15 +83,13 @@ Yes. Your E-volve login credentials are encrypted with **AES-256**, the same sta
 All managed via `requirements.txt`:
 
 - **selenium** - browser automation
-- **pandas** - data processing and Excel generation
-- **requests** - PDF downloads
-- **openpyxl** - Excel formatting (autofit, autofilter)
-- **cryptography** - AES-256 credential encryption
+- **openpyxl** - Excel reading, writing, and formatting
+- **pyaes** - AES-256 credential encryption
 - **customtkinter** - desktop GUI framework
 
 ### How It Works
 
-The app uses Selenium to control a Chrome browser (headless by default) to log into the E-volve platform, navigate the results table, and extract data. PDF reports are downloaded directly via their document store URLs. Results are deduplicated using a hash of each candidate's core fields, so re-running is safe and only fetches new data.
+The app uses Selenium to control a Chrome browser (headless by default) to log into the E-volve platform, navigate the results table, and extract data. PDF reports are downloaded directly via their document store URLs using Python's built-in `urllib`. Results are deduplicated using a hash of each candidate's core fields, so re-running is safe and only fetches new data.
 
 ## License
 

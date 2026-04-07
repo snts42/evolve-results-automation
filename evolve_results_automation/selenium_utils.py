@@ -22,18 +22,35 @@ COL_INDEX = {
     "Percent": 9, "Duration": 10, "Centre Name": 11,
 }
 
+MATCH_COLS = ["Enrolment no.", "First name", "Last name", "Completed", "Test Name", "Result"]
+
+def _get_screen_size():
+    """Get primary screen resolution (width, height) using Windows API."""
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        return user32.GetSystemMetrics(0), user32.GetSystemMetrics(1)
+    except Exception:
+        return 1920, 1080  # Safe fallback
+
 def start_driver(headless=True):   
     chrome_options = Options()
     chrome_options.add_argument("--start-maximized")
-    chrome_options.add_argument("--force-device-scale-factor=0.5") 
     if headless:  
         chrome_options.add_argument("--headless=new")
+        chrome_options.add_argument("--window-size=3840,2160")
+        chrome_options.add_argument("--force-device-scale-factor=0.5")
+    else:
+        sw, sh = _get_screen_size()
+        scale = 0.5 if sh >= 1080 else 0.24
+        chrome_options.add_argument(f"--force-device-scale-factor={scale}")
+        logging.info(f"Screen resolution: {sw}x{sh}, scale factor: {scale}")
     chrome_options.add_argument("--log-level=3") 
     chrome_options.add_experimental_option('excludeSwitches', ['enable-logging']) 
     try:
         driver = webdriver.Chrome(options=chrome_options)
     except Exception as e:
-        logging.error(f"Failed to start Chrome. Ensure Google Chrome is installed. Error: {e}")
+        logging.error("Failed to start Chrome. Ensure Google Chrome is installed. Error: %s" % e)
         raise
     return driver
 
@@ -41,7 +58,7 @@ def safe_find(driver, by, value, timeout=15):
     try:
         return WebDriverWait(driver, timeout).until(EC.presence_of_element_located((by, value)))
     except Exception as e:
-        raise Exception(f"Element not found (timeout): {value}") from e
+        raise Exception("Element not found (timeout): %s" % value) from e
 
 def login(driver, username: str, password: str):
     driver.get(RESULTS_URL)
@@ -59,7 +76,7 @@ def login(driver, username: str, password: str):
     errors = driver.find_elements(By.CLASS_NAME, "validation-summary-errors")
     if errors:
         error_text = errors[0].text.strip()
-        raise Exception(f"Login failed for {username}: {error_text}")
+        raise Exception("Login failed for %s: %s" % (username, error_text))
     logging.info("Login submitted")
 
 def switch_to_results_iframe(driver, wait=10, timeout=15):
@@ -77,13 +94,13 @@ def parse_results_table(driver, existing_hashes):
     rows = driver.find_elements(By.XPATH, ROW_XPATH)
     all_rows = []
     real_rows = 0
-    for idx, row in enumerate(rows):
+    for row in rows:
         cells = row.find_elements(By.TAG_NAME, "td")
         if not any(cell.text.strip() for cell in cells) or len(cells) < 12:
             continue
         real_rows += 1
         data = {
-            col: cells[idx].text.strip() for col, idx in COL_INDEX.items()
+            col: cells[ci].text.strip() for col, ci in COL_INDEX.items()
         }
         data.update({
             "Scraping date/time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -100,7 +117,7 @@ def parse_results_table(driver, existing_hashes):
         if h in existing_hashes:
             continue
         all_rows.append(data)
-    logging.info(f"Found {real_rows} data rows, {len(all_rows)} new")
+    logging.info("Found %d data rows, %d new" % (real_rows, len(all_rows)))
     return all_rows
 
 def select_table_row(driver, row):
@@ -109,10 +126,9 @@ def select_table_row(driver, row):
         tds = tr.find_elements(By.TAG_NAME, "td")
         if not tds or len(tds) < 12:
             continue
-        match_cols = ["Enrolment no.", "First name", "Last name", "Completed", "Test Name", "Result"]
         matches = all(
             tds[COL_INDEX[col]].text.strip() == str(row[col]).strip()
-            for col in match_cols
+            for col in MATCH_COLS
         )
         if matches:
             driver.execute_script("arguments[0].scrollIntoView(true);", tr)
@@ -171,7 +187,7 @@ def click_next_page(driver):
         driver.execute_script("arguments[0].scrollIntoView(true);", next_btn)
         time.sleep(0.5)
         driver.execute_script("arguments[0].click();", next_btn)
-        logging.info(f"Navigated to next page")
+        logging.info("Navigated to next page")
         time.sleep(10)
         return True
     except Exception as e:

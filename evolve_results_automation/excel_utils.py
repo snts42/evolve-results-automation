@@ -2,50 +2,103 @@ import os
 import re
 import glob
 import logging
-import pandas as pd
 from datetime import datetime
-from openpyxl import load_workbook
+from openpyxl import Workbook, load_workbook
+from openpyxl.styles import Font, PatternFill
 
 from .config import COLUMNS, BASE_DIR, get_excel_file_for_year
 from .parsing_utils import unique_row_hash
 
+
+def _normalize(val):
+    """Normalize a cell value to a clean string (empty string for None/NaN)."""
+    if val is None:
+        return ""
+    s = str(val).strip()
+    return "" if s.lower() == "nan" else s
+
+
 def initialize_excel(filepath: str):
     if not os.path.exists(filepath):
         logging.info(f"Excel file not found, creating {filepath}")
-        df = pd.DataFrame(columns=COLUMNS)
-        df.to_excel(filepath, index=False)
+        wb = Workbook()
+        ws = wb.active
+        ws.append(COLUMNS)
+        wb.save(filepath)
+        wb.close()
+
 
 def load_existing_results(filepath: str):
+    """Load rows from an Excel file as a list of dicts with string values."""
     if not os.path.exists(filepath):
-        return pd.DataFrame()
-    return pd.read_excel(filepath, dtype=str)
+        return []
+    wb = load_workbook(filepath, read_only=True, data_only=True)
+    ws = wb.active
+    rows_iter = ws.iter_rows(values_only=True)
 
-def save_results(filepath: str, df: pd.DataFrame):
-    df = df.copy()
+    # First row is the header
+    try:
+        headers = [str(h) if h is not None else "" for h in next(rows_iter)]
+    except StopIteration:
+        wb.close()
+        return []
+
+    result = []
+    for row_values in rows_iter:
+        row_dict = {headers[i]: _normalize(row_values[i]) for i in range(len(headers))}
+        result.append(row_dict)
+
+    wb.close()
+    return result
+
+
+def save_results(filepath: str, rows: list):
+    """Write rows (list of dicts) to an Excel file, then apply formatting."""
     date_cols_ddmmyyyy = ["Result Sent", "Certificate", "E-Certificate sent"]
-    for col in date_cols_ddmmyyyy:
-        if col in df.columns:
-            df[col] = df[col].apply(format_ddmmyyyy)
-    df.to_excel(filepath, index=False)
+    wb = Workbook()
+    ws = wb.active
+    ws.append(COLUMNS)
+    for row in rows:
+        values = []
+        for col in COLUMNS:
+            val = row.get(col, "")
+            if col in date_cols_ddmmyyyy:
+                val = format_ddmmyyyy(val)
+            values.append(val)
+        ws.append(values)
+    wb.save(filepath)
+    wb.close()
     autofilter_and_autofit(filepath)
 
+
 def format_ddmmyyyy(val):
-    if not val or pd.isna(val):
+    if not val:
+        return ""
+    s = str(val).strip()
+    if not s:
         return ""
     try:
-        if isinstance(val, str) and len(val) == 10 and val[2] == '/' and val[5] == '/':
-            return val
-        dt = pd.to_datetime(val, errors='coerce')
-        if pd.isna(dt):
-            return val
+        if len(s) == 10 and s[2] == '/' and s[5] == '/':
+            return s
+        dt = datetime.strptime(s, "%Y-%m-%d %H:%M:%S")
         return dt.strftime("%d/%m/%Y")
-    except Exception:
-        return val
+    except (ValueError, TypeError):
+        return s
+
 
 def autofilter_and_autofit(filepath: str):
     wb = load_workbook(filepath)
     ws = wb.active
     ws.auto_filter.ref = ws.dimensions
+    # Freeze top row so header stays visible when scrolling
+    ws.freeze_panes = "A2"
+    # Style header row (City & Guilds red with white bold text)
+    header_font = Font(bold=True, color='FFFFFF')
+    header_fill = PatternFill(start_color='E30613', end_color='E30613', fill_type='solid')
+    for cell in ws[1]:
+        cell.font = header_font
+        cell.fill = header_fill
+    # Auto-fit column widths
     for col in ws.columns:
         max_length = 0
         col_letter = col[0].column_letter
@@ -60,6 +113,7 @@ def autofilter_and_autofit(filepath: str):
     wb.save(filepath)
     wb.close()
 
+
 def save_year_to_excel(year, rows_by_year, silent=False):
     """Save rows for a given year to Excel, merging with existing data and deduplicating."""
     if year not in rows_by_year:
@@ -69,42 +123,40 @@ def save_year_to_excel(year, rows_by_year, silent=False):
     initialize_excel(excel_file)
 
     # Load existing data (may contain rows from previous accounts)
-    existing_df = load_existing_results(excel_file)
+    existing = load_existing_results(excel_file)
 
-    # Create DataFrame from current rows (includes PDF links from processing)
-    new_df = pd.DataFrame(year_rows)
-
-    # Merge existing + new, then deduplicate
-    if not existing_df.empty:
-        combined = pd.concat([existing_df, new_df], ignore_index=True)
-    else:
-        combined = new_df.copy()
+    # Merge existing + new
+    combined = existing + year_rows
 
     # Remove garbage rows missing core fields
     core_fields = ["Completed", "First name", "Last name"]
-    for cf in core_fields:
-        if cf in combined.columns:
-            combined = combined[combined[cf].notna() & (combined[cf] != "")]
+    combined = [r for r in combined
+                if all(r.get(cf, "").strip() for cf in core_fields)]
 
     # Deduplicate using unique_row_hash, keep last (in-memory rows have latest PDF links)
-    combined['_hash'] = combined.apply(unique_row_hash, axis=1)
-    combined = combined.drop_duplicates(subset='_hash', keep='last')
-    combined = combined.drop(columns='_hash')
+    seen = {}
+    for row in combined:
+        seen[unique_row_hash(row)] = row
+    combined = list(seen.values())
 
-    # Enforce column order from config
-    combined = combined.reindex(columns=COLUMNS)
+    # Enforce column order from config (fill missing columns with empty string)
+    combined = [{col: row.get(col, "") for col in COLUMNS} for row in combined]
 
     # Sort by completion date
-    if "Completed" in combined.columns:
+    def sort_key(row):
         try:
-            combined["Completed_sort"] = pd.to_datetime(combined["Completed"], format="%d/%m/%Y", errors="coerce")
-            combined = combined.sort_values(by="Completed_sort", ascending=True).drop(columns="Completed_sort")
-        except Exception as e:
-            logging.warning(f"Sorting failed for year {year}: {e}")
+            return datetime.strptime(row.get("Completed", ""), "%d/%m/%Y")
+        except (ValueError, TypeError):
+            return datetime.max
+    try:
+        combined.sort(key=sort_key)
+    except Exception as e:
+        logging.warning(f"Sorting failed for year {year}: {e}")
 
     save_results(excel_file, combined)
     if not silent:
         logging.info(f"Saved {len(combined)} rows to {year}/exam_results.xlsx")
+
 
 def load_all_existing_data():
     """Load all existing year Excel files and return hashes + rows needing PDF download.
@@ -119,27 +171,25 @@ def load_all_existing_data():
         folder_name = os.path.basename(os.path.dirname(excel_path))
         if not re.match(r'^\d{4}$', folder_name):
             continue
-        ef = load_existing_results(excel_path)
-        if not ef.empty:
-            for _, r in ef.iterrows():
-                # Skip garbage rows missing core fields
-                completed_val = str(r.get("Completed", "")).strip()
-                if not completed_val or completed_val == "nan":
-                    continue
-                
-                existing_hashes.add(unique_row_hash(r))
-                # If row needs PDF, add to rows_by_year for processing
-                report_dl = str(r.get("PDF report save time", "")).strip()
-                if not report_dl or report_dl == "nan":
-                    try:
-                        yr = datetime.strptime(completed_val, "%d/%m/%Y").year
-                    except (ValueError, TypeError):
-                        continue  # Skip rows with unparseable dates
-                    if yr not in rows_by_year:
-                        rows_by_year[yr] = []
-                    row_dict = {k: ("" if pd.isna(v) else v) for k, v in r.items()}
-                    rows_by_year[yr].append(row_dict)
-                    pdf_resume_count += 1
+        rows = load_existing_results(excel_path)
+        for r in rows:
+            # Skip garbage rows missing core fields
+            completed_val = r.get("Completed", "").strip()
+            if not completed_val:
+                continue
+
+            existing_hashes.add(unique_row_hash(r))
+            # If row needs PDF, add to rows_by_year for processing
+            report_dl = r.get("PDF report save time", "").strip()
+            if not report_dl:
+                try:
+                    yr = datetime.strptime(completed_val, "%d/%m/%Y").year
+                except (ValueError, TypeError):
+                    continue  # Skip rows with unparseable dates
+                if yr not in rows_by_year:
+                    rows_by_year[yr] = []
+                rows_by_year[yr].append(r)
+                pdf_resume_count += 1
     logging.info(f"Loaded {len(existing_hashes)} existing results from Excel files")
     if pdf_resume_count > 0:
         logging.info(f"Found {pdf_resume_count} existing rows needing PDF download (resuming)")

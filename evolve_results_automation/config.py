@@ -2,6 +2,8 @@ import os
 import sys
 from datetime import datetime
 
+APP_VER = "v1.2.0"
+
 if getattr(sys, 'frozen', False):
     # Running as a PyInstaller bundled .exe - use the exe's directory
     BASE_DIR = os.path.dirname(sys.executable)

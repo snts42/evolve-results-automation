@@ -1,11 +1,12 @@
 import os
 import logging
-import requests
 from dataclasses import dataclass
 from datetime import datetime
+from urllib.request import urlopen, Request
+from urllib.error import URLError, HTTPError
 
 from evolve_results_automation.config import (
-    ENCRYPTED_CREDENTIALS_FILE, DOCUMENT_STORE_URL
+    APP_VER, ENCRYPTED_CREDENTIALS_FILE, DOCUMENT_STORE_URL
 )
 from evolve_results_automation.excel_utils import (
     save_year_to_excel, load_all_existing_data
@@ -39,6 +40,8 @@ class EvolveAutomation:
     def run(self):
         """Top-level entry point: setup, decrypt accounts, iterate."""
         setup_logger()
+        mode = "headless" if self.headless else "non-headless (browser visible)"
+        logging.info(f"Evolve Results Automation {APP_VER} | Mode: {mode}")
         accounts = SecureCredentialManager(ENCRYPTED_CREDENTIALS_FILE).decrypt_credentials(self.master_password)
 
         # Filter accounts if specific username selected
@@ -52,6 +55,10 @@ class EvolveAutomation:
             logging.warning("No accounts found in credentials")
             return self.stats
 
+        account_names = ", ".join(a.get("username", "?").strip() for a in accounts)
+        logging.info(f"Processing {len(accounts)} account(s): {account_names}")
+
+        account_reports = []
         for idx_acc, account in enumerate(accounts):
             username = account.get("username", "").strip()
             password = account.get("password", "").strip()
@@ -59,6 +66,10 @@ class EvolveAutomation:
                 logging.warning(f"Credentials missing, skipping account #{idx_acc+1}")
                 continue
             logging.info(f"--- Starting for account #{idx_acc+1}: {username} ---")
+            # Snapshot stats before this account
+            rows_before = self.stats.new_rows_added
+            pdfs_before = self.stats.pdfs_downloaded
+            errs_before = self.stats.errors_encountered
             driver = start_driver(headless=self.headless)
             try:
                 self._process_account(driver, username, password)
@@ -71,7 +82,21 @@ class EvolveAutomation:
                     driver.quit()
                 except Exception:
                     pass
+                acct_rows = self.stats.new_rows_added - rows_before
+                acct_pdfs = self.stats.pdfs_downloaded - pdfs_before
+                acct_errs = self.stats.errors_encountered - errs_before
+                account_reports.append((username, acct_rows, acct_pdfs, acct_errs))
+                logging.info(f"Account {username}: {acct_rows} new results, {acct_pdfs} PDFs, {acct_errs} error(s)")
                 logging.info("Chrome closed for this account\n")
+        # Final summary (include per-account breakdown if multiple accounts)
+        if len(account_reports) > 1:
+            logging.info("--- Run Summary ---")
+            for name, rows, pdfs, errs in account_reports:
+                logging.info(f"  {name}: {rows} new results, {pdfs} PDFs, {errs} error(s)")
+        logging.info(f"Run complete: {self.stats.accounts_processed} account(s), "
+                     f"{self.stats.new_rows_added} new results, "
+                     f"{self.stats.pdfs_downloaded} PDFs downloaded, "
+                     f"{self.stats.errors_encountered} error(s)")
         return self.stats
 
     def _process_account(self, driver, username, password):
@@ -195,17 +220,23 @@ class EvolveAutomation:
             logging.info(f"PDF already on disk, updating timestamp")
             return True
 
-        resp = requests.get(pdf_url, stream=True, timeout=(10, 30))
         try:
-            if resp.status_code == 200:
+            resp = urlopen(Request(pdf_url), timeout=30)
+            try:
                 with open(save_path, 'wb') as f:
-                    for chunk in resp.iter_content(10240):
+                    while True:
+                        chunk = resp.read(10240)
+                        if not chunk:
+                            break
                         f.write(chunk)
                 logging.info(f"PDF saved: {target_name}")
                 self.stats.pdfs_downloaded += 1
                 return True
-            else:
-                logging.warning(f"Failed to download PDF, status: {resp.status_code}")
-                return False
-        finally:
-            resp.close()
+            finally:
+                resp.close()
+        except HTTPError as e:
+            logging.warning(f"Failed to download PDF, status: {e.code}")
+            return False
+        except (URLError, OSError) as e:
+            logging.warning(f"Failed to download PDF: {e}")
+            return False

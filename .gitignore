@@ -3,7 +3,7 @@ credentials.enc
 
 # Build artifacts
 build/
-dist/
+dist*/
 *.spec
 *.exe
 
