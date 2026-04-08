@@ -2,7 +2,7 @@ import os
 import sys
 from datetime import datetime
 
-APP_VER = "v1.2.0"
+APP_VER = "v1.2.1"
 
 if getattr(sys, 'frozen', False):
     # Running as a PyInstaller bundled .exe - use the exe's directory

@@ -13,9 +13,11 @@ def setup_logger():
     root = logging.getLogger()
     root.setLevel(logging.INFO)
 
-    # Avoid adding duplicate handlers on repeated calls
-    if any(isinstance(h, _FlushHandler) for h in root.handlers):
-        return
+    # Remove old file handler so each run gets a fresh log file
+    for h in root.handlers[:]:
+        if isinstance(h, _FlushHandler):
+            h.close()
+            root.removeHandler(h)
 
     log_file = current_log_path()
     file_handler = _FlushHandler(log_file, encoding='utf-8')

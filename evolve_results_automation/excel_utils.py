@@ -53,7 +53,7 @@ def load_existing_results(filepath: str):
 
 
 def save_results(filepath: str, rows: list):
-    """Write rows (list of dicts) to an Excel file, then apply formatting."""
+    """Write rows (list of dicts) to an Excel file with formatting applied in one save."""
     date_cols_ddmmyyyy = ["Result Sent", "Certificate", "E-Certificate sent"]
     wb = Workbook()
     ws = wb.active
@@ -66,29 +66,8 @@ def save_results(filepath: str, rows: list):
                 val = format_ddmmyyyy(val)
             values.append(val)
         ws.append(values)
-    wb.save(filepath)
-    wb.close()
-    autofilter_and_autofit(filepath)
 
-
-def format_ddmmyyyy(val):
-    if not val:
-        return ""
-    s = str(val).strip()
-    if not s:
-        return ""
-    try:
-        if len(s) == 10 and s[2] == '/' and s[5] == '/':
-            return s
-        dt = datetime.strptime(s, "%Y-%m-%d %H:%M:%S")
-        return dt.strftime("%d/%m/%Y")
-    except (ValueError, TypeError):
-        return s
-
-
-def autofilter_and_autofit(filepath: str):
-    wb = load_workbook(filepath)
-    ws = wb.active
+    # Apply formatting in-memory before saving (single I/O operation)
     ws.auto_filter.ref = ws.dimensions
     # Freeze top row so header stays visible when scrolling
     ws.freeze_panes = "A2"
@@ -110,8 +89,24 @@ def autofilter_and_autofit(filepath: str):
             except Exception:
                 pass
         ws.column_dimensions[col_letter].width = max(10, min(max_length + 2, 50))
+
     wb.save(filepath)
     wb.close()
+
+
+def format_ddmmyyyy(val):
+    if not val:
+        return ""
+    s = str(val).strip()
+    if not s:
+        return ""
+    try:
+        if len(s) == 10 and s[2] == '/' and s[5] == '/':
+            return s
+        dt = datetime.strptime(s, "%Y-%m-%d %H:%M:%S")
+        return dt.strftime("%d/%m/%Y")
+    except (ValueError, TypeError):
+        return s
 
 
 def save_year_to_excel(year, rows_by_year, silent=False):

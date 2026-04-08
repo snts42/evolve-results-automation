@@ -36,6 +36,7 @@ class EvolveAutomation:
         self.master_password = master_password
         self.selected_username = selected_username
         self.stats = ProcessingStats()
+        self._driver = None
 
     def run(self):
         """Top-level entry point: setup, decrypt accounts, iterate."""
@@ -71,6 +72,7 @@ class EvolveAutomation:
             pdfs_before = self.stats.pdfs_downloaded
             errs_before = self.stats.errors_encountered
             driver = start_driver(headless=self.headless)
+            self._driver = driver
             try:
                 self._process_account(driver, username, password)
                 self.stats.accounts_processed += 1
@@ -78,6 +80,7 @@ class EvolveAutomation:
                 logging.error(f"Error processing account {username}: {e}")
                 self.stats.errors_encountered += 1
             finally:
+                self._driver = None
                 try:
                     driver.quit()
                 except Exception:
@@ -216,7 +219,7 @@ class EvolveAutomation:
         target_name = report_filename(row)
         save_path = os.path.join(target_dir, target_name)
 
-        if os.path.exists(save_path):
+        if os.path.exists(save_path) and os.path.getsize(save_path) > 0:
             logging.info(f"PDF already on disk, updating timestamp")
             return True
 

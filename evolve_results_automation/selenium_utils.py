@@ -9,6 +9,9 @@ from selenium.webdriver.support import expected_conditions as EC
 from .config import RESULTS_URL
 from .parsing_utils import unique_row_hash
 
+# JS snippet to find the last (most recently opened) calendar in the DOM
+_JS_LAST_CALENDAR = "var calendars = document.querySelectorAll('.dx-calendar'); var calendar = calendars[calendars.length - 1];"
+
 ROW_XPATH = (
     "//div[contains(@class, 'dx-datagrid-rowsview')]"
     "//table[contains(@class, 'dx-datagrid-table')]"
@@ -50,7 +53,7 @@ def start_driver(headless=True):
     try:
         driver = webdriver.Chrome(options=chrome_options)
     except Exception as e:
-        logging.error("Failed to start Chrome. Ensure Google Chrome is installed. Error: %s" % e)
+        logging.error(f"Failed to start Chrome. Ensure Google Chrome is installed. Error: {e}")
         raise
     return driver
 
@@ -58,7 +61,7 @@ def safe_find(driver, by, value, timeout=15):
     try:
         return WebDriverWait(driver, timeout).until(EC.presence_of_element_located((by, value)))
     except Exception as e:
-        raise Exception("Element not found (timeout): %s" % value) from e
+        raise Exception(f"Element not found (timeout): {value}") from e
 
 def login(driver, username: str, password: str):
     driver.get(RESULTS_URL)
@@ -76,7 +79,7 @@ def login(driver, username: str, password: str):
     errors = driver.find_elements(By.CLASS_NAME, "validation-summary-errors")
     if errors:
         error_text = errors[0].text.strip()
-        raise Exception("Login failed for %s: %s" % (username, error_text))
+        raise Exception(f"Login failed for {username}: {error_text}")
     logging.info("Login submitted")
 
 def switch_to_results_iframe(driver, wait=10, timeout=15):
@@ -117,7 +120,7 @@ def parse_results_table(driver, existing_hashes):
         if h in existing_hashes:
             continue
         all_rows.append(data)
-    logging.info("Found %d data rows, %d new" % (real_rows, len(all_rows)))
+    logging.info(f"Found {real_rows} data rows, {len(all_rows)} new")
     return all_rows
 
 def select_table_row(driver, row):
@@ -254,30 +257,11 @@ def set_date_filter_to_previous_month_start(driver, timeout=10):
         
         time.sleep(2)
         
-        # Step 3: Check if calendar is now visible (aria-expanded should be true)
-        expanded = driver.execute_script("""
-            var startContainer = document.querySelector('.dx-datagrid-filter-range-start');
-            var input = startContainer.querySelector('input.dx-texteditor-input');
-            return input ? input.getAttribute('aria-expanded') : 'INPUT_NOT_FOUND';
-        """)
-        if expanded != 'true':
-            # Try clicking the input field to trigger the calendar
-            logging.info("Calendar not expanded, trying to click input field...")
-            driver.execute_script("""
-                var startContainer = document.querySelector('.dx-datagrid-filter-range-start');
-                var input = startContainer.querySelector('input.dx-texteditor-input');
-                if (input) { input.focus(); input.click(); }
-            """)
-            time.sleep(2)
-        
         # Step 4: Find the calendar and read current month
         # Calendar popup is rendered outside the start container, search from document
-        result = driver.execute_script("""
-            var calendars = document.querySelectorAll('.dx-calendar');
-            if (calendars.length === 0) return 'CALENDAR_NOT_FOUND|count:0';
-            
-            // Use the last calendar (most recently opened)
-            var calendar = calendars[calendars.length - 1];
+        result = driver.execute_script(f"""
+            {_JS_LAST_CALENDAR}
+            if (!calendar) return 'CALENDAR_NOT_FOUND|count:0';
             var caption = calendar.querySelector('.dx-calendar-caption-button');
             var captionText = caption ? caption.textContent : 'NO_CAPTION';
             return 'CALENDAR_FOUND:' + captionText + '|count:' + calendars.length;
@@ -287,18 +271,16 @@ def set_date_filter_to_previous_month_start(driver, timeout=10):
             return False
         
         # Step 5: Navigate back exactly ONE month
-        driver.execute_script("""
-            var calendars = document.querySelectorAll('.dx-calendar');
-            var calendar = calendars[calendars.length - 1];
+        driver.execute_script(f"""
+            {_JS_LAST_CALENDAR}
             var prevBtn = calendar.querySelector('.dx-calendar-navigator-previous-month');
             if (prevBtn) prevBtn.click();
         """)
         time.sleep(1)
         
         # Read the new month/year after navigating back
-        new_caption = driver.execute_script("""
-            var calendars = document.querySelectorAll('.dx-calendar');
-            var calendar = calendars[calendars.length - 1];
+        new_caption = driver.execute_script(f"""
+            {_JS_LAST_CALENDAR}
             var caption = calendar.querySelector('.dx-calendar-caption-button');
             return caption ? caption.textContent : '';
         """)
@@ -312,8 +294,7 @@ def set_date_filter_to_previous_month_start(driver, timeout=10):
         
         # Step 6: Click the 1st of the target month
         clicked = driver.execute_script(f"""
-            var calendars = document.querySelectorAll('.dx-calendar');
-            var calendar = calendars[calendars.length - 1];
+            {_JS_LAST_CALENDAR}
             var cell = calendar.querySelector('td.dx-calendar-cell[data-value="{target_value}"]');
             if (!cell) return 'CELL_NOT_FOUND';
             cell.click();

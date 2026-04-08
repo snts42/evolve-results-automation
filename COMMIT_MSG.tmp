@@ -1,0 +1,36 @@
+fix: bug fixes, security hardening, leaner build
+
+Bug fixes:
+- Fixed log file never rotating between runs (setup_logger now replaces old handler)
+- Fixed stale dropdown after removing account (resets to "All Accounts")
+- Fixed Chrome staying running on app close (quit active driver on exit)
+- Fixed remove_credential return value ignored (GUI now checks bool result)
+- Fixed add_credential showing wrong error (distinguishes "exists" vs save failure)
+- Fixed dead JSONDecodeError catch (replaced with ValueError)
+- Fixed results label green even with errors (amber when errors > 0)
+
+Security:
+- Atomic credential file writes via tempfile + os.replace() (prevents corruption)
+
+Code quality:
+- Merged Excel double I/O into single save (formatting applied in-memory)
+- Extracted _build_lock_card helper (lock screen / reset password dedup)
+- Extracted _create_dialog helper (settings / help dialog dedup)
+- Extracted _JS_LAST_CALENDAR constant (4 repeated JS snippets)
+- Consistent f-string formatting in selenium_utils.py
+- Removed redundant os.makedirs on BASE_DIR in _save_last_run
+
+Optimisation:
+- Partial PDF downloads (0-byte files) now re-downloaded instead of skipped
+
+Build:
+- Synced 6 --exclude-module flags from .spec into CI workflow (unittest, xmlrpc, pydoc, ftplib, imaplib, smtplib)
+- Excluded asyncio/_asyncio (not imported by any dependency)
+- Moved selenium browser cleanup (firefox/edge/ie/safari) from --exclude-module to post-build deletion (avoids import errors)
+- Fixed Tcl/Tk pruning paths (_tcl_data/_tk_data, not tcl/tk — was a no-op on CI)
+- Tcl/Tk pruning: msgs, tzdata, demos, stock images, opt, http packages
+- CJK encoding pruning: kept 8 Western .enc files, removed 74 CJK/legacy files
+- Build reduced from 16.2 MB to ~13 MB zipped (27 MB unzipped)
+
+Version:
+- Bumped APP_VER to v1.2.1

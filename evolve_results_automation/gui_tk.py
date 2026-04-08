@@ -107,6 +107,7 @@ class EvolveGUI:
         self.manager        = SecureCredentialManager(ENCRYPTED_CREDENTIALS_FILE)
         self.master_password = None
         self.automation_thread = None
+        self._automation    = None
         self.log_queue      = queue.Queue()
         self._read_only     = False
         self._log_handler   = None
@@ -214,12 +215,13 @@ class EvolveGUI:
     def _divider(self, parent):
         return ctk.CTkFrame(parent, height=1, fg_color=BORDER)
 
-    # ====================================================== LOCK SCREEN
-    def _show_lock_screen(self):
-        self._lock = ctk.CTkFrame(self.root, fg_color=BG)
-        self._lock.pack(fill="both", expand=True)
+    # ====================================================== LOCK CARD HELPER
+    def _build_lock_card(self):
+        """Build the shared lock screen / reset password card layout."""
+        frame = ctk.CTkFrame(self.root, fg_color=BG)
+        frame.pack(fill="both", expand=True)
 
-        outer = ctk.CTkFrame(self._lock, fg_color="transparent")
+        outer = ctk.CTkFrame(frame, fg_color="transparent")
         outer.place(relx=0.5, rely=0.46, anchor="center")
 
         card = ctk.CTkFrame(outer, fg_color=SURFACE, corner_radius=16,
@@ -232,6 +234,12 @@ class EvolveGUI:
         # accent stripe
         ctk.CTkFrame(inner, height=4, fg_color=CG_RED,
                      corner_radius=2).pack(fill="x", pady=(0, S20))
+
+        return frame, inner
+
+    # ====================================================== LOCK SCREEN
+    def _show_lock_screen(self):
+        self._lock, inner = self._build_lock_card()
 
         ctk.CTkLabel(inner, text="E-volve SecureAssess",
                      font=self._f(22,"bold"), text_color=CG_RED
@@ -313,21 +321,7 @@ class EvolveGUI:
     # -------------------------------------------------- reset password
     def _show_reset_password(self):
         self._lock.destroy()
-        self._lock = ctk.CTkFrame(self.root, fg_color=BG)
-        self._lock.pack(fill="both", expand=True)
-
-        outer = ctk.CTkFrame(self._lock, fg_color="transparent")
-        outer.place(relx=0.5, rely=0.46, anchor="center")
-
-        card = ctk.CTkFrame(outer, fg_color=SURFACE, corner_radius=16,
-                            border_width=1, border_color=BORDER, width=440)
-        card.pack()
-
-        inner = ctk.CTkFrame(card, fg_color="transparent")
-        inner.pack(fill="x", padx=S32, pady=S32)
-
-        ctk.CTkFrame(inner, height=4, fg_color=CG_RED,
-                     corner_radius=2).pack(fill="x", pady=(0, S20))
+        self._lock, inner = self._build_lock_card()
         ctk.CTkLabel(inner, text="Reset Password",
                      font=self._f(22,"bold"), text_color=CG_RED
                      ).pack(pady=(0, S12))
@@ -611,27 +605,30 @@ class EvolveGUI:
                       command=lambda: webbrowser.open(REPO_URL)
                       ).pack(side="right", pady=S2)
 
+    # ========================================================= DIALOG HELPER
+    def _create_dialog(self, title, w=440, h=420, grab=False):
+        """Create a styled dialog window with accent stripe."""
+        win = ctk.CTkToplevel(self.root)
+        win.title(title)
+        win.resizable(False, False)
+        win.configure(fg_color=BG)
+        win.transient(self.root)
+        if grab:
+            win.grab_set()
+        self._center_dialog(win, w, h)
+        self._apply_dialog_icon(win)
+        ctk.CTkFrame(win, height=3, fg_color=CG_RED,
+                     corner_radius=0).pack(fill="x")
+        return win
+
     # ========================================================= SETTINGS DIALOG
     def _open_settings(self):
         if self._settings_win and self._settings_win.winfo_exists():
             self._settings_win.focus()
             return
 
-        w, h = 440, 420
-        win = ctk.CTkToplevel(self.root)
-        win.title("Settings")
-        win.resizable(False, False)
-        win.configure(fg_color=BG)
-        win.transient(self.root)
-        win.grab_set()
+        win = self._create_dialog("Settings", grab=True)
         self._settings_win = win
-        self._center_dialog(win, w, h)
-
-        self._apply_dialog_icon(win)
-
-        # Red accent stripe
-        ctk.CTkFrame(win, height=3, fg_color=CG_RED,
-                     corner_radius=0).pack(fill="x")
 
         inner = ctk.CTkFrame(win, fg_color="transparent")
         inner.pack(fill="both", expand=True, padx=S16, pady=S12)
@@ -741,8 +738,19 @@ class EvolveGUI:
                     status_lbl.configure(text=f"Added '{u}'.",
                                          text_color=SUCCESS)
                 else:
-                    status_lbl.configure(text=f"'{u}' already exists.",
-                                         text_color=DANGER)
+                    # Check if username exists to show correct error
+                    try:
+                        creds = self.manager.list_credentials(
+                            master_password=self.master_password)
+                        exists = any(c.get("username") == u for c in creds)
+                    except Exception:
+                        exists = False
+                    if exists:
+                        status_lbl.configure(text=f"'{u}' already exists.",
+                                             text_color=DANGER)
+                    else:
+                        status_lbl.configure(text="Failed to save credential.",
+                                             text_color=DANGER)
             except Exception as e:
                 status_lbl.configure(text=f"Error: {e}",
                                      text_color=DANGER)
@@ -764,12 +772,16 @@ class EvolveGUI:
                 self.root.after(3000, reset)
             else:
                 try:
-                    self.manager.remove_credential(
+                    removed = self.manager.remove_credential(
                         username, master_password=self.master_password)
-                    self._refresh_account_data()
-                    refresh_fn()
-                    status_lbl.configure(
-                        text=f"Removed '{username}'.", text_color=SUCCESS)
+                    if removed:
+                        self._refresh_account_data()
+                        refresh_fn()
+                        status_lbl.configure(
+                            text=f"Removed '{username}'.", text_color=SUCCESS)
+                    else:
+                        status_lbl.configure(
+                            text=f"'{username}' not found.", text_color=DANGER)
                 except Exception as e:
                     status_lbl.configure(
                         text=f"Error: {e}", text_color=DANGER)
@@ -782,20 +794,8 @@ class EvolveGUI:
             self._help_win.focus()
             return
 
-        w, h = 440, 420
-        win = ctk.CTkToplevel(self.root)
-        win.title("Help")
-        win.resizable(False, False)
-        win.configure(fg_color=BG)
-        win.transient(self.root)
+        win = self._create_dialog("Help")
         self._help_win = win
-        self._center_dialog(win, w, h)
-
-        self._apply_dialog_icon(win)
-
-        # Red accent stripe
-        ctk.CTkFrame(win, height=3, fg_color=CG_RED,
-                     corner_radius=0).pack(fill="x")
 
         # Bottom section (pinned to bottom)
         bottom = ctk.CTkFrame(win, fg_color="transparent")
@@ -914,7 +914,6 @@ class EvolveGUI:
 
     def _save_last_run(self, stats):
         try:
-            os.makedirs(os.path.dirname(LAST_RUN_FILE), exist_ok=True)
             data = {
                 "timestamp": datetime.now().strftime("%d/%m/%Y %H:%M"),
                 "accounts": stats.accounts_processed,
@@ -1010,6 +1009,9 @@ class EvolveGUI:
                 text=f"{n} account{'s' if n!=1 else ''}")
             names = [c.get("username","?") for c in creds]
             self._account_values = ["All Accounts"] + names
+            # Reset selection if current account was removed
+            if self.account_var.get() not in self._account_values:
+                self._select_account("All Accounts")
         except Exception:
             self.cred_lbl.configure(text="Error")
 
@@ -1120,8 +1122,11 @@ class EvolveGUI:
             self._log_handler = h
             logging.getLogger().addHandler(h)
 
-            stats = EvolveAutomation(
-                headless, self.master_password, selected_username).run()
+            automation = EvolveAutomation(
+                headless, self.master_password, selected_username)
+            self._automation = automation
+            stats = automation.run()
+            self._automation = None
             self.log_queue.put(("done", stats))
         except Exception as e:
             self.log_queue.put(("error", str(e)))
@@ -1227,12 +1232,13 @@ class EvolveGUI:
         self._log(f"Completed in {dur}")
 
         # Update results summary
+        result_colour = AMBER if stats.errors_encountered > 0 else SUCCESS
         self._results_lbl.configure(
             text=(f"Completed - {stats.accounts_processed} account(s), "
                   f"{stats.new_rows_added} new results, "
                   f"{stats.pdfs_downloaded} PDF reports, "
                   f"{stats.errors_encountered} error(s)"),
-            text_color=SUCCESS)
+            text_color=result_colour)
         if not self._results_lbl.winfo_ismapped():
             self._results_lbl.pack(fill="x", padx=S16, pady=(S4, S8))
 
@@ -1253,6 +1259,12 @@ class EvolveGUI:
             if not messagebox.askyesno(
                     "Confirm", "Automation is running. Quit anyway?"):
                 return
+            # Quit the active Chrome driver to prevent orphaned processes
+            if self._automation and self._automation._driver:
+                try:
+                    self._automation._driver.quit()
+                except Exception:
+                    pass
         self.root.destroy()
 
     def _center_window(self):

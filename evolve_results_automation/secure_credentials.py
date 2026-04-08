@@ -3,6 +3,7 @@ import os
 import hmac
 import hashlib
 import logging
+import tempfile
 import pyaes
 
 
@@ -142,7 +143,11 @@ class SecureCredentialManager:
         """
         try:
             # Get current credentials
-            credentials = self.decrypt_credentials(master_password)
+            try:
+                credentials = self.decrypt_credentials(master_password)
+            except (FileNotFoundError, ValueError):
+                # Handle case where file doesn't exist or is corrupted
+                credentials = []
             
             # Filter out the credential to remove
             initial_count = len(credentials)
@@ -181,7 +186,7 @@ class SecureCredentialManager:
             # Get current credentials
             try:
                 credentials = self.decrypt_credentials(master_password)
-            except (FileNotFoundError, json.JSONDecodeError):
+            except (FileNotFoundError, ValueError):
                 # Handle case where file is empty or doesn't exist yet
                 credentials = []
             
@@ -213,8 +218,23 @@ class SecureCredentialManager:
         plaintext = json.dumps(credentials).encode()
         encrypted_data = self._encrypt(plaintext, master_password)
         
-        with open(self.encrypted_file, 'wb') as f:
-            f.write(encrypted_data)
+        # Atomic write: write to temp file then replace to prevent corruption
+        dir_name = os.path.dirname(self.encrypted_file) or '.'
+        fd, tmp_path = tempfile.mkstemp(dir=dir_name)
+        try:
+            os.write(fd, encrypted_data)
+            os.close(fd)
+            os.replace(tmp_path, self.encrypted_file)
+        except Exception as e:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
 
     def list_credentials(self, master_password: str = None) -> list:
         """Get all usernames from encrypted file. Returns list of usernames or empty list on error."""

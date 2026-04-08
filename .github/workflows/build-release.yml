@@ -50,21 +50,66 @@ jobs:
             --exclude-module "yaml" `
             --exclude-module "pandas" `
             --exclude-module "cryptography" `
+            --exclude-module "unittest" `
+            --exclude-module "xmlrpc" `
+            --exclude-module "pydoc" `
+            --exclude-module "ftplib" `
+            --exclude-module "imaplib" `
+            --exclude-module "smtplib" `
+            --exclude-module "asyncio" `
+            --exclude-module "_asyncio" `
             evolve_results_automation/__main__.py
 
-      - name: Remove unused Selenium platform binaries
+      - name: Remove unused Selenium data (platform binaries + unused browsers)
         shell: pwsh
         run: |
           $internal = "dist/EvolveResultsAutomation/_internal"
           $patterns = @(
             "$internal/selenium/webdriver/common/macos",
-            "$internal/selenium/webdriver/common/linux"
+            "$internal/selenium/webdriver/common/linux",
+            "$internal/selenium/webdriver/firefox",
+            "$internal/selenium/webdriver/edge",
+            "$internal/selenium/webdriver/ie",
+            "$internal/selenium/webdriver/safari"
           )
           foreach ($p in $patterns) {
             if (Test-Path $p) {
               Remove-Item -Recurse -Force $p
               Write-Host "Removed $p"
             }
+          }
+
+      - name: Prune Tcl/Tk data (msgs, tzdata, demos, CJK encodings)
+        shell: pwsh
+        run: |
+          $internal = "dist/EvolveResultsAutomation/_internal"
+
+          # Remove entire directories that are never used
+          $patterns = @(
+            "$internal/_tcl_data/msgs",
+            "$internal/_tk_data/msgs",
+            "$internal/_tcl_data/tzdata",
+            "$internal/_tk_data/demos",
+            "$internal/_tk_data/images",
+            "$internal/_tcl_data/opt*",
+            "$internal/_tcl_data/http*",
+            "$internal/tcl8"
+          )
+          foreach ($p in $patterns) {
+            foreach ($match in (Get-Item $p -ErrorAction SilentlyContinue)) {
+              Remove-Item -Recurse -Force $match
+              Write-Host "Removed $match"
+            }
+          }
+
+          # Prune CJK encodings from _tcl_data/encoding (keep Western only)
+          $encDir = "$internal/_tcl_data/encoding"
+          if (Test-Path $encDir) {
+            $keep = @("ascii.enc","utf-8.enc","cp1252.enc","cp1251.enc","cp1250.enc","iso8859-1.enc","iso8859-15.enc","iso8859-2.enc")
+            Get-ChildItem $encDir -File | Where-Object { $keep -notcontains $_.Name } | ForEach-Object {
+              Remove-Item $_.FullName -Force
+            }
+            Write-Host "Pruned CJK encodings, kept $($keep.Count) Western files"
           }
 
       - name: Zip release folder
