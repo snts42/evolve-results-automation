@@ -43,8 +43,6 @@ jobs:
             --collect-data "customtkinter" `
             --exclude-module "selenium.webdriver.common.devtools" `
             --exclude-module "numpy" `
-            --exclude-module "PIL" `
-            --exclude-module "Pillow" `
             --exclude-module "lxml" `
             --exclude-module "psutil" `
             --exclude-module "yaml" `
@@ -58,6 +56,9 @@ jobs:
             --exclude-module "smtplib" `
             --exclude-module "asyncio" `
             --exclude-module "_asyncio" `
+            --hidden-import "pystray._win32" `
+            --hidden-import "winotify" `
+            --collect-all "pystray" `
             evolve_results_automation/__main__.py
 
       - name: Remove unused Selenium data (platform binaries + unused browsers)
@@ -110,6 +111,18 @@ jobs:
               Remove-Item $_.FullName -Force
             }
             Write-Host "Pruned CJK encodings, kept $($keep.Count) Western files"
+          }
+
+      - name: Prune unused Pillow image codecs
+        shell: pwsh
+        run: |
+          $internal = "dist/EvolveResultsAutomation/_internal"
+          $unused = @("_avif", "_webp", "_imagingcms", "_imagingft", "_imagingtk")
+          foreach ($codec in $unused) {
+            Get-ChildItem "$internal/PIL/${codec}*.pyd" -ErrorAction SilentlyContinue | ForEach-Object {
+              Remove-Item $_.FullName -Force
+              Write-Host "Removed $($_.Name)"
+            }
           }
 
       - name: Zip release folder

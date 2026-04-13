@@ -45,6 +45,9 @@ def start_driver(headless=True):
         chrome_options.add_argument("--force-device-scale-factor=0.5")
     else:
         sw, sh = _get_screen_size()
+        # Scale factor shrinks the viewport so all 50 datagrid rows fit in the DOM.
+        # DevExtreme virtualises rows outside the visible area - too little zoom-out
+        # means rows are removed from the DOM and can't be scraped.
         scale = 0.5 if sh >= 1080 else 0.24
         chrome_options.add_argument(f"--force-device-scale-factor={scale}")
         logging.info(f"Screen resolution: {sw}x{sh}, scale factor: {scale}")
@@ -66,6 +69,11 @@ def safe_find(driver, by, value, timeout=15):
 def login(driver, username: str, password: str):
     driver.get(RESULTS_URL)
     time.sleep(5)
+    # Maintenance check: if login fields are missing after page load, site may be down
+    if not driver.find_elements(By.ID, "UserName"):
+        raise ConnectionError(
+            "E-volve login page did not load. The site may be under maintenance. "
+            "Try again later or check https://evolve.cityandguilds.com manually.")
     user_box = safe_find(driver, By.ID, "UserName")
     pass_box = safe_find(driver, By.ID, "Password")
     user_box.clear()

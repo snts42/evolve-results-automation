@@ -6,10 +6,10 @@ from urllib.request import urlopen, Request
 from urllib.error import URLError, HTTPError
 
 from evolve_results_automation.config import (
-    APP_VER, ENCRYPTED_CREDENTIALS_FILE, DOCUMENT_STORE_URL
+    APP_VER, ENCRYPTED_CREDENTIALS_FILE, DOCUMENT_STORE_URL, RESULTS_URL, get_excel_file_for_year
 )
 from evolve_results_automation.excel_utils import (
-    save_year_to_excel, load_all_existing_data
+    save_year_to_excel, load_all_existing_data, add_analytics_sheet
 )
 from evolve_results_automation.selenium_utils import (
     start_driver, login, switch_to_results_iframe,
@@ -29,14 +29,16 @@ class ProcessingStats:
     new_rows_added: int = 0
     pdfs_downloaded: int = 0
     errors_encountered: int = 0
+    pdfs_skipped: int = 0
 
 class EvolveAutomation:
-    def __init__(self, headless: bool, master_password: str, selected_username: str = None):
+    def __init__(self, headless: bool, master_password: str, selected_username: str = None, stop_event=None):
         self.headless = headless
         self.master_password = master_password
         self.selected_username = selected_username
         self.stats = ProcessingStats()
         self._driver = None
+        self._stop_event = stop_event
 
     def run(self):
         """Top-level entry point: setup, decrypt accounts, iterate."""
@@ -59,8 +61,13 @@ class EvolveAutomation:
         account_names = ", ".join(a.get("username", "?").strip() for a in accounts)
         logging.info(f"Processing {len(accounts)} account(s): {account_names}")
 
+        self._preflight_check()
+
         account_reports = []
         for idx_acc, account in enumerate(accounts):
+            if self._stop_event and self._stop_event.is_set():
+                logging.info("Automation stopped by user")
+                break
             username = account.get("username", "").strip()
             password = account.get("password", "").strip()
             if not username or not password:
@@ -71,26 +78,37 @@ class EvolveAutomation:
             rows_before = self.stats.new_rows_added
             pdfs_before = self.stats.pdfs_downloaded
             errs_before = self.stats.errors_encountered
-            driver = start_driver(headless=self.headless)
-            self._driver = driver
-            try:
-                self._process_account(driver, username, password)
-                self.stats.accounts_processed += 1
-            except Exception as e:
-                logging.error(f"Error processing account {username}: {e}")
-                self.stats.errors_encountered += 1
-            finally:
-                self._driver = None
+
+            max_attempts = 2
+            for attempt in range(1, max_attempts + 1):
+                if self._stop_event and self._stop_event.is_set():
+                    break
+                driver = start_driver(headless=self.headless)
+                self._driver = driver
                 try:
-                    driver.quit()
-                except Exception:
-                    pass
-                acct_rows = self.stats.new_rows_added - rows_before
-                acct_pdfs = self.stats.pdfs_downloaded - pdfs_before
-                acct_errs = self.stats.errors_encountered - errs_before
-                account_reports.append((username, acct_rows, acct_pdfs, acct_errs))
-                logging.info(f"Account {username}: {acct_rows} new results, {acct_pdfs} PDFs, {acct_errs} error(s)")
-                logging.info("Chrome closed for this account\n")
+                    self._process_account(driver, username, password)
+                    self.stats.accounts_processed += 1
+                    break  # success - no retry needed
+                except Exception as e:
+                    if attempt < max_attempts:
+                        logging.warning(f"Attempt {attempt} failed for {username}: {e}")
+                        logging.info(f"Retrying with a fresh browser...")
+                    else:
+                        logging.error(f"Error processing account {username} (attempt {attempt}/{max_attempts}): {e}")
+                        self.stats.errors_encountered += 1
+                finally:
+                    self._driver = None
+                    try:
+                        driver.quit()
+                    except Exception:
+                        pass
+
+            acct_rows = self.stats.new_rows_added - rows_before
+            acct_pdfs = self.stats.pdfs_downloaded - pdfs_before
+            acct_errs = self.stats.errors_encountered - errs_before
+            account_reports.append((username, acct_rows, acct_pdfs, acct_errs))
+            logging.info(f"Account {username}: {acct_rows} new results, {acct_pdfs} PDFs, {acct_errs} error(s)")
+            logging.info("Chrome closed for this account")
         # Final summary (include per-account breakdown if multiple accounts)
         if len(account_reports) > 1:
             logging.info("--- Run Summary ---")
@@ -101,6 +119,16 @@ class EvolveAutomation:
                      f"{self.stats.pdfs_downloaded} PDFs downloaded, "
                      f"{self.stats.errors_encountered} error(s)")
         return self.stats
+
+    def _preflight_check(self):
+        """Test connectivity to E-volve before starting automation."""
+        try:
+            resp = urlopen(Request(RESULTS_URL.split('#')[0],
+                                   headers={"User-Agent": "Mozilla/5.0"}), timeout=10)
+            resp.close()
+        except (URLError, OSError) as e:
+            raise ConnectionError(
+                f"Cannot reach E-volve. Check your internet connection. ({e})") from e
 
     def _process_account(self, driver, username, password):
         """Login, set filters, scrape all pages, and download PDFs for one account."""
@@ -121,6 +149,9 @@ class EvolveAutomation:
 
         # Process each page
         for page_num in range(1, total_pages + 1):
+            if self._stop_event and self._stop_event.is_set():
+                logging.info("Automation stopped by user - saving progress")
+                break
             logging.info(f"Processing page {page_num}/{total_pages}")
 
             # Scrape table and group new rows by year
@@ -139,6 +170,11 @@ class EvolveAutomation:
         for year in rows_by_year:
             save_year_to_excel(year, rows_by_year)
 
+        # Generate analytics once at the end of the run
+        for year in rows_by_year:
+            excel_file = get_excel_file_for_year(year)
+            add_analytics_sheet(excel_file)
+
         logging.info(f"All done for account {username}")
 
     def _scrape_page(self, driver, page_num, existing_hashes, rows_by_year):
@@ -150,7 +186,8 @@ class EvolveAutomation:
                 try:
                     year = datetime.strptime(completed_date, "%d/%m/%Y").year
                 except (ValueError, TypeError):
-                    year = datetime.now().year  # Fallback to current year
+                    year = datetime.now().year
+                    logging.warning(f"Unparseable date '{completed_date}' for {row.get('First name', '?')} {row.get('Last name', '?')}, defaulting to {year}")
 
                 if year not in rows_by_year:
                     rows_by_year[year] = []
@@ -178,6 +215,8 @@ class EvolveAutomation:
             return
 
         for row in pdf_needed:
+            if self._stop_event and self._stop_event.is_set():
+                break
             try:
                 completed = str(row.get("Completed", "")).strip()
                 if not completed:
@@ -211,6 +250,12 @@ class EvolveAutomation:
                     navigate_to_results(driver)
                 except Exception as ex:
                     logging.error(f"Failed to recover after error: {ex}")
+                    remaining = sum(
+                        1 for r in pdf_needed
+                        if not r.get("PDF report save time"))
+                    if remaining:
+                        self.stats.pdfs_skipped += remaining
+                        logging.warning(f"{remaining} PDF(s) skipped due to unrecoverable navigation error")
                     break
 
     def _download_pdf(self, pdf_url, row, completed):

@@ -24,6 +24,8 @@ def report_filename(row):
     ]
     fname = " ".join(parts) + ".pdf"
     fname = "".join(c for c in fname if c not in r'\/:*?"<>|')
+    if len(fname) > 200:
+        fname = fname[:196] + ".pdf"
     return fname
 
 def unique_row_hash(row):

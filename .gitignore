@@ -12,12 +12,21 @@ dist*/
 [12][0-9][0-9][0-9]/
 
 # Internal docs (not published to repo)
-CHANGELOG.md
 TODO.md
 RELEASE_NOTES_*.md
 
+# Dev workflow artifacts
+v1.3.0-tracker.md
+COMMIT_MSG_batch*.md
+COMMIT_MSG.tmp
+dashboard_structure_final.md
+dash_err.txt
+check_excel.py
+
 # Generated data
 last_run.json
+settings.json
+evolve.lock
 
 # Python
 __pycache__/
