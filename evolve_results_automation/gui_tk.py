@@ -19,8 +19,9 @@ import customtkinter as ctk
 from tkinter import messagebox
 
 from .config import (APP_VER, ENCRYPTED_CREDENTIALS_FILE, BASE_DIR,
-                     get_excel_file_for_year, get_reports_base_for_year,
-                     get_logs_base_for_year, load_settings, save_settings,
+                     ANALYTICS_FILE, get_excel_file_for_year,
+                     get_reports_base_for_year, get_logs_base_for_year,
+                     load_settings, save_settings,
                      list_year_folders, list_year_excel_files)
 from .secure_credentials import SecureCredentialManager
 
@@ -159,6 +160,8 @@ class EvolveGUI:
         self._sched_enabled = ctk.BooleanVar(value=self._settings.get("schedule_enabled", False))
         self._sched_time = ctk.StringVar(value=self._settings.get("schedule_time", ""))
         self._minimize_to_tray = ctk.BooleanVar(value=self._settings.get("minimize_to_tray", False))
+        self._date_range = ctk.StringVar(value="Last month")
+        self._download_pdfs = ctk.BooleanVar(value=True)
         self._tray_icon = None
         self._scheduler_last_fired = set()
         self._update_checked = False
@@ -693,7 +696,7 @@ class EvolveGUI:
         btn_row = ctk.CTkFrame(inner, fg_color="transparent")
         btn_row.pack(fill="x")
 
-        self._excel_btn = self._btn_secondary(btn_row, "Excel",
+        self._excel_btn = self._btn_secondary(btn_row, "Results",
                             self._open_current_excel,
                             height=32, width=80)
         self._excel_btn.pack(side="left", padx=(0, S8))
@@ -703,6 +706,13 @@ class EvolveGUI:
         self._btn_secondary(btn_row, "Logs",
                             lambda: self._open_current_folder("logs"),
                             height=32, width=80).pack(side="left")
+
+        # Analytics button - visible when 1+ year folders exist
+        self._analytics_btn = self._btn_secondary(
+            btn_row, "Analytics", self._open_analytics,
+            height=32, width=90)
+        if len(list_year_folders()) >= 1:
+            self._analytics_btn.pack(side="left", padx=(S8, 0))
 
     # ------------------------------------------------------- activity log
     def _build_activity_log(self, parent):
@@ -774,7 +784,7 @@ class EvolveGUI:
             self._settings_win.focus()
             return
 
-        win = self._create_dialog("Settings", w=440, h=463, grab=True)
+        win = self._create_dialog("Settings", w=440, h=560, grab=True)
         self._settings_win = win
 
         inner = ctk.CTkFrame(win, fg_color="transparent")
@@ -799,8 +809,8 @@ class EvolveGUI:
             button_hover_color=ELEVATED, fg_color=BORDER
         ).pack(anchor="w", pady=(0, S4))
 
-        startup_var = ctk.BooleanVar(value=os.path.exists(_STARTUP_LNK))
-        self._settings["start_with_windows"] = startup_var.get()
+        startup_var = ctk.BooleanVar(
+            value=self._settings.get("start_with_windows", False))
 
         def _on_startup_toggle():
             self._settings["start_with_windows"] = startup_var.get()
@@ -823,6 +833,39 @@ class EvolveGUI:
                 progress_color=CG_RED, button_color=SURFACE,
                 button_hover_color=ELEVATED, fg_color=BORDER
             ).pack(anchor="w")
+
+        self._divider(inner).pack(fill="x", pady=(S6, S6))
+
+        # -- AUTOMATION --
+        ctk.CTkLabel(inner, text="AUTOMATION",
+                     font=self._f(10, "bold"), text_color=CG_RED,
+                     anchor="w").pack(anchor="w", pady=(0, S4))
+
+        dr_row = ctk.CTkFrame(inner, fg_color="transparent")
+        dr_row.pack(fill="x", pady=(0, S4))
+        ctk.CTkLabel(dr_row, text="Date range:",
+                     font=self._f(12), text_color=TEXT_MID
+                     ).pack(side="left", padx=(0, S8))
+        _DR_OPTIONS = ["Last month", "Last 3 months", "Last 6 months",
+                       "Last 12 months", "Last 18 months", "Last 2 years",
+                       "Last 2.5 years"]
+        dr_menu = ctk.CTkOptionMenu(
+            dr_row, variable=self._date_range, values=_DR_OPTIONS,
+            command=lambda _: self._persist_settings(),
+            font=self._f(12), dropdown_font=self._f(12),
+            fg_color=SURFACE, button_color=BORDER,
+            button_hover_color=ELEVATED, text_color=TEXT,
+            dropdown_fg_color=SURFACE, dropdown_text_color=TEXT,
+            dropdown_hover_color=ELEVATED, width=150)
+        dr_menu.pack(side="left")
+
+        ctk.CTkSwitch(
+            inner, text="Download PDF reports",
+            variable=self._download_pdfs, command=self._persist_settings,
+            font=self._f(12), text_color=TEXT_MID,
+            progress_color=CG_RED, button_color=SURFACE,
+            button_hover_color=ELEVATED, fg_color=BORDER
+        ).pack(anchor="w", pady=(0, S4))
 
         self._divider(inner).pack(fill="x", pady=(S6, S6))
 
@@ -1119,6 +1162,8 @@ class EvolveGUI:
         self._settings["schedule_enabled"] = self._sched_enabled.get()
         self._settings["schedule_time"] = self._sched_time.get()
         self._settings["minimize_to_tray"] = self._minimize_to_tray.get()
+        # date_range and download_pdfs are intentionally NOT persisted -
+        # they reset to defaults (Last month + PDFs on) each session
         save_settings(self._settings)
 
     # ========================================================= SYSTEM TRAY
@@ -1266,7 +1311,7 @@ class EvolveGUI:
                                     self.automation_thread and self.automation_thread.is_alive()):
                                 self._scheduler_last_fired.add(fire_key)
                                 logging.info(f"Scheduled run triggered at {now_hm}")
-                                self.root.after(0, self._run_automation)
+                                self.root.after(0, lambda: self._run_automation(scheduled=True))
                             elif not self.master_password:
                                 logging.warning(
                                     f"Scheduled run at {now_hm} skipped - app is locked. "
@@ -1336,14 +1381,15 @@ class EvolveGUI:
         if not _HAS_WINOTIFY or not self.notifications.get():
             return
         try:
+            icon = self._notify_icon_path()
             toast = _WinNotification(
                 app_id="E-volve Automation",
                 title=title,
                 msg=msg,
-                icon=self._notify_icon_path())
+                icon=icon)
             toast.build().show()
-        except Exception:
-            pass
+        except Exception as e:
+            logging.debug(f"Toast notification failed: {e}")
 
     # ========================================================= AUTO UPDATE CHECK
     def _check_for_updates(self):
@@ -1434,8 +1480,35 @@ class EvolveGUI:
             self._qo_values = year_dirs
             if self._qo_year.get() not in year_dirs:
                 self._qo_year.set(cur_year)
+            # Show/hide Analytics button based on year count (show if >= 1 year)
+            if hasattr(self, '_analytics_btn'):
+                if len(year_dirs) >= 1:
+                    self._analytics_btn.pack(side="left", padx=(S8, 0))
+                else:
+                    self._analytics_btn.pack_forget()
         except Exception:
             pass
+
+    def _open_analytics(self):
+        # If only 1 year of data, open that year's Excel (which has Analytics tab)
+        year_dirs = list_year_folders()
+        if len(year_dirs) == 1:
+            year = int(year_dirs[0])
+            year_file = get_excel_file_for_year(year)
+            if os.path.exists(year_file):
+                self._open_path(year_file)
+            else:
+                messagebox.showinfo(
+                    "Not Found",
+                    f"No data file found for {year}.\n\n"
+                    "Run automation first to generate analytics.")
+        elif os.path.exists(ANALYTICS_FILE):
+            self._open_path(ANALYTICS_FILE)
+        else:
+            messagebox.showinfo(
+                "Not Found",
+                "No analytics file found.\n\n"
+                "Run automation first to generate analytics.")
 
     def _open_current_excel(self):
         year = int(self._qo_year.get()) if hasattr(self, '_qo_year') else datetime.now().year
@@ -1654,10 +1727,18 @@ class EvolveGUI:
 
     # ====================================================== AUTOMATION
     def _check_excel_locks(self):
+        """Check if any Excel files are locked/open. Returns list of locked year strings."""
         locked = []
+        # Check analytics.xlsx
+        if os.path.exists(ANALYTICS_FILE):
+            lock_file = os.path.join(os.path.dirname(ANALYTICS_FILE),
+                                     "~$" + os.path.basename(ANALYTICS_FILE))
+            if os.path.exists(lock_file):
+                locked.append("analytics")
+        # Check year Excel files
         for year, p in list_year_excel_files():
             # Check for Excel's hidden ~$ lock file (fast path)
-            lock_file = os.path.join(os.path.dirname(p), "~$exam_results.xlsx")
+            lock_file = os.path.join(os.path.dirname(p), "~$" + os.path.basename(p))
             if os.path.exists(lock_file):
                 locked.append(year)
                 continue
@@ -1669,10 +1750,11 @@ class EvolveGUI:
                 locked.append(year)
         return locked
 
-    def _run_automation(self):
+    def _run_automation(self, scheduled=False):
         if self.automation_thread and self.automation_thread.is_alive():
             self._set_status("Automation is already running.", DANGER)
             return
+        self._run_scheduled = scheduled
         try:
             creds = self.manager.list_credentials(
                 master_password=self.master_password)
@@ -1687,8 +1769,14 @@ class EvolveGUI:
 
         locked = self._check_excel_locks()
         if locked:
+            files = []
+            for item in locked:
+                if item == "analytics":
+                    files.append("analytics.xlsx")
+                else:
+                    files.append(f"{item}/exam_results_{item}.xlsx")
             self._set_status(
-                f"Close Excel first: {', '.join(locked)}/exam_results.xlsx",
+                f"Close Excel first: {', '.join(files)}",
                 DANGER)
             return
 
@@ -1734,6 +1822,9 @@ class EvolveGUI:
                                command=self._stop_automation)
         self._excel_btn.configure(state="disabled", fg_color=ELEVATED,
                                    text_color=TEXT_DIM)
+        if hasattr(self, '_analytics_btn'):
+            self._analytics_btn.configure(state="disabled", fg_color=ELEVATED,
+                                          text_color=TEXT_DIM)
         if hasattr(self, '_lock_btn') and self._lock_btn.winfo_exists():
             self._lock_btn.configure(state="disabled", text_color=BORDER)
         self._show_progress_section()
@@ -1741,12 +1832,18 @@ class EvolveGUI:
         self._set_status("Starting...", CG_RED)
 
         headless = not self.show_browser.get()
+        _DR_MONTHS = {"Last month": 1, "Last 3 months": 3, "Last 6 months": 6,
+                      "Last 12 months": 12, "Last 18 months": 18,
+                      "Last 2 years": 24, "Last 2.5 years": 30}
+        months_back = _DR_MONTHS.get(self._date_range.get(), 1)
+        skip_pdfs = not self._download_pdfs.get()
         self.automation_thread = threading.Thread(
-            target=self._worker, args=(headless, selected), daemon=True)
+            target=self._worker,
+            args=(headless, selected, months_back, skip_pdfs), daemon=True)
         self.automation_thread.start()
         self.root.after(80, self._poll_queue)
 
-    def _worker(self, headless, selected_username):
+    def _worker(self, headless, selected_username, months_back=1, skip_pdfs=False):
         try:
             from .main import EvolveAutomation
 
@@ -1765,9 +1862,13 @@ class EvolveGUI:
             self._log_handler = h
             logging.getLogger().addHandler(h)
 
+            scheduled = getattr(self, '_run_scheduled', False)
+
             automation = EvolveAutomation(
                 headless, self.master_password, selected_username,
-                stop_event=self._stop_event)
+                stop_event=self._stop_event,
+                months_back=months_back, skip_pdfs=skip_pdfs,
+                scheduled=scheduled)
             self._automation = automation
             stats = automation.run()
             self._automation = None
@@ -1814,25 +1915,29 @@ class EvolveGUI:
         elif "Login submitted" in msg:
             self._acct_progress = W["login"]; self._push_progress()
             self._set_status(self._stat("Loading results..."), CG_RED)
-        elif "Refreshing table" in msg:
+        elif "Loading results" in msg:
             self._acct_progress = W["login"]+W["refresh"]
             self._push_progress()
+            self._set_status(self._stat("Loading results..."), CG_RED)
+        elif "Filtering results" in msg:
+            self._acct_progress = W["login"]+W["refresh"]+W["filter"]*0.5
+            self._push_progress()
             self._set_status(self._stat("Applying filters..."), CG_RED)
-        elif "Date filter updated" in msg:
+        elif "Date filter set" in msg:
             self._acct_progress = W["login"]+W["refresh"]+W["filter"]
             self._push_progress()
-            self._set_status(self._stat("Loading data..."), CG_RED)
-        elif "page(s) to scrape" in msg:
-            m = re.search(r"Found (\d+) page", msg)
+            self._set_status(self._stat("Applying filters..."), CG_RED)
+        elif "page(s) to check" in msg:
+            m = re.search(r"(\d+) page\(s\) to check", msg)
             if m:
                 self._acct_pages = max(int(m.group(1)), 1)
             base = W["login"]+W["refresh"]+W["filter"]+W["hashes"]
             self._acct_progress = base; self._push_progress()
             self._set_status(
-                self._stat(f"Scraping {self._acct_pages} page(s)..."),
+                self._stat(f"Checking {self._acct_pages} page(s)..."),
                 CG_RED)
-        elif "Processing page" in msg:
-            m = re.search(r"Processing page (\d+)/(\d+)", msg)
+        elif "Checking page" in msg:
+            m = re.search(r"Checking page (\d+)/(\d+)", msg)
             if m:
                 pg = int(m.group(1))
                 base = W["login"]+W["refresh"]+W["filter"]+W["hashes"]
@@ -1840,12 +1945,15 @@ class EvolveGUI:
                 self._push_progress()
                 self._set_status(
                     self._stat(f"Page {pg}/{self._acct_pages}"), CG_RED)
-        elif "Processing PDF for" in msg:
+        elif "Downloading PDF" in msg:
             base = W["login"]+W["refresh"]+W["filter"]+W["hashes"]+W["scrape"]
             self._acct_progress = min(base+W["pdfs"]*0.5, 0.95)
             self._push_progress()
             self._set_status(self._stat("Downloading PDFs..."), CG_RED)
-        elif "All done for account" in msg:
+        elif "Updating analytics" in msg:
+            self._acct_progress = 0.90; self._push_progress()
+            self._set_status(self._stat("Updating analytics..."), CG_RED)
+        elif "Finished account" in msg:
             self._acct_progress = 0.95; self._push_progress()
         elif "Chrome closed" in msg:
             self._done_accounts += 1; self._acct_progress = 0.0
@@ -1873,16 +1981,20 @@ class EvolveGUI:
             return
         self._stop_event.set()
         self.run_btn.configure(state="disabled", text="Stopping...",
-                               fg_color=ELEVATED, text_color=TEXT_MID)
+                               fg_color=ELEVATED, text_color=TEXT_MID,
+                               hover_color=CG_RED_HOVER)
 
     def _reset_controls(self):
-        """Re-enable run, Excel and lock buttons after automation ends."""
-        self.run_btn.configure(state="normal", text="Run Automation",
+        """Re-enable run, Results and lock buttons after automation ends."""
+        self.run_btn.configure(text="Run Automation", hover_color=CG_RED_HOVER,
                                fg_color=CG_RED, text_color=SURFACE,
-                               border_width=0,
+                               border_width=0, state="normal",
                                command=self._run_automation)
         self._excel_btn.configure(state="normal", fg_color=SURFACE,
-                                   text_color=TEXT)
+                                   text_color=TEXT, text="Results")
+        if hasattr(self, '_analytics_btn'):
+            self._analytics_btn.configure(state="normal", fg_color=SURFACE,
+                                          text_color=TEXT)
         if hasattr(self, '_lock_btn') and self._lock_btn.winfo_exists():
             self._lock_btn.configure(state="normal", text_color=TEXT_DIM)
 
@@ -2057,11 +2169,7 @@ class EvolveGUI:
                           "Check the system tray.")
             self.root.destroy()
             return
-        if os.path.exists(ENCRYPTED_CREDENTIALS_FILE):
-            # Already set up - open directly in read-only, unlock via header button
-            self._skip_to_read_only()
-        else:
-            # First-time setup - must create master password
-            self._show_lock_screen()
+        # Always show lock screen on startup (first-time setup or returning user)
+        self._show_lock_screen()
         self._start_scheduler()
         self.root.mainloop()

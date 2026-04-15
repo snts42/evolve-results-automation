@@ -5,7 +5,7 @@ import json
 import logging
 from datetime import datetime
 
-APP_VER = "v1.3.0"
+APP_VER = "v1.3.1"
 
 if getattr(sys, 'frozen', False):
     # Running as a PyInstaller bundled .exe - use the exe's directory
@@ -22,7 +22,7 @@ def _year_folder_path(year):
 
 def get_excel_file_for_year(year):
     """Get the Excel file path for a specific year (no mkdir)."""
-    return os.path.join(_year_folder_path(year), "exam_results.xlsx")
+    return os.path.join(_year_folder_path(year), f"exam_results_{year}.xlsx")
 
 def get_reports_base_for_year(year):
     """Get the reports base folder for a specific year (no mkdir)."""
@@ -67,8 +67,9 @@ COLUMNS = [
     "Keycode", "Subject"
 ]
 
-# Credentials stay at root level (shared across years)
+# Root-level files (shared across years)
 ENCRYPTED_CREDENTIALS_FILE = os.path.join(BASE_DIR, "credentials.enc")
+ANALYTICS_FILE = os.path.join(BASE_DIR, "analytics.xlsx")
 
 # User settings (persisted across sessions)
 SETTINGS_FILE = os.path.join(BASE_DIR, "settings.json")

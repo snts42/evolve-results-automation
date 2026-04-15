@@ -54,8 +54,9 @@ EvolveResultsAutomation/
   EvolveResultsAutomation.exe
   _internal/
   credentials.enc
+  analytics.xlsx
   2026/
-    exam_results.xlsx
+    exam_results_2026.xlsx
     reports/
       03 15/
         John Smith Test Name Pass.pdf

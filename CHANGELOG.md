@@ -4,6 +4,33 @@ All notable changes to E-volve SecureAssess Automation are documented in this fi
 
 ---
 
+## [v1.3.1] - 2026-04-15
+
+### Added
+- **Combined analytics workbook** (`analytics.xlsx`) - Overview tab with cross-year KPIs (total exams, candidates, pass rate, resit conversion, most popular exam, busiest month), year-over-year volume chart, monthly volume chart, exam breakdown, year comparison table, rebook opportunities, and candidates to rebook. Per-year tabs mirror the per-year Excel analytics with identical sections. Generated when 2+ years of data exist. Lock check prevents data corruption if `analytics.xlsx` is open in Excel during automation
+- **Configurable date range** - dropdown in Settings from Last month to Last 2.5 years (resets each session)
+- **Skip PDF downloads** - toggle in Settings to skip PDF report downloads (resets each session)
+- **Pagination recovery** - detects when E-volve serves duplicate pages and applies 3-step recovery (wait and re-read, refresh table, stop early with warning)
+- **Analytics button** - Quick Open card button opens per-year Excel with 1 year of data, combined analytics with 2+. Disabled during automation runs
+
+### Changed
+- **Renamed `exam_results.xlsx`** to `exam_results_YYYY.xlsx` - allows opening multiple years in Excel simultaneously
+- **Always show lock screen on startup** - removed auto read-only mode for security; lock screen shown every launch
+- **Unified analytics builder** - per-year Excel analytics and combined workbook year tabs now share the same `_build_year_dashboard` function, ensuring consistent sections (overview, charts, key insights, rebook opportunities, candidates to rebook, extra time)
+- **Rebook section headers** - split into "REBOOK OPPORTUNITIES" summary table and "CANDIDATES TO REBOOK" detail table with separate section headers
+- **KPI cards** - added text wrapping for long exam names and increased row heights for subtitle visibility
+- **Scraping resilience** - `parse_results_table` and `click_next_page` retry up to 3 times on stale element errors. Date filter overlay explicitly dismissed after selection
+- **Log messages** - clearer status: "browser not visible" (headless mode), "Loaded N previous results" (resume), "Checking page N of M" (scraping), "Downloading PDF" (download progress)
+- **Scheduled runs** tracked with `scheduled=True` parameter for clearer log output
+- **Toast notification errors** logged at debug level instead of silently swallowed
+- **Start with Windows toggle** - no longer auto-detects existing shortcut; uses saved setting (default off)
+- **Analytics on stop** - analytics now regenerates when new rows are added or PDFs are downloaded, including on early stop and PDF-only resume runs
+- **PDF date-range skip** - PDF downloads skip rows outside the current date filter range instead of silently failing to find them in the table
+- Moved `handle_duplicate_page` to `selenium_utils`, `regenerate_analytics` to `excel_utils`, `download_pdf` to `parsing_utils` - `main.py` is now pure orchestration
+- Removed dead code: `_compute_resit_data` (unused return values), `_compute_cross_year_resits` (never called)
+
+---
+
 ## [v1.3.0] - 2026-04-13
 
 ### Added

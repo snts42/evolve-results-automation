@@ -1,6 +1,9 @@
 import os
 import re
+import logging
 from datetime import datetime
+from urllib.request import urlopen, Request
+from urllib.error import URLError, HTTPError
 
 from .config import get_reports_base_for_year
 
@@ -41,3 +44,34 @@ def extract_pdf_filename_from_html(html):
     if match:
         return match.group(1)
     return None
+
+def download_pdf(pdf_url, row, completed):
+    """Download a PDF report to the appropriate dated folder.
+    Returns True if the file was downloaded or already exists on disk."""
+    target_dir = make_report_folder_path(completed)
+    target_name = report_filename(row)
+    save_path = os.path.join(target_dir, target_name)
+
+    if os.path.exists(save_path) and os.path.getsize(save_path) > 0:
+        logging.info("PDF already on disk, updating timestamp")
+        return True
+
+    try:
+        resp = urlopen(Request(pdf_url), timeout=30)
+        try:
+            with open(save_path, 'wb') as f:
+                while True:
+                    chunk = resp.read(10240)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+            logging.info("  PDF saved")
+            return True
+        finally:
+            resp.close()
+    except HTTPError as e:
+        logging.warning(f"Failed to download PDF, status: {e.code}")
+        return False
+    except (URLError, OSError) as e:
+        logging.warning(f"Failed to download PDF: {e}")
+        return False

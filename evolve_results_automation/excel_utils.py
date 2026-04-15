@@ -9,7 +9,7 @@ from openpyxl.chart.label import DataLabelList
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
-from .config import COLUMNS, get_excel_file_for_year, list_year_excel_files
+from .config import COLUMNS, ANALYTICS_FILE, get_excel_file_for_year, list_year_excel_files
 from .parsing_utils import unique_row_hash
 
 
@@ -167,10 +167,10 @@ def save_year_to_excel(year, rows_by_year, silent=False):
     finally:
         wb.close()
     if not silent:
-        logging.info(f"Saved {len(combined)} rows to {year}/exam_results.xlsx")
+        logging.info(f"Saved {len(combined)} rows to {year}/exam_results_{year}.xlsx")
 
 
-def load_all_existing_data():
+def load_all_existing_data(silent=False):
     """Load all existing year Excel files and return hashes + rows needing PDF download.
     
     Returns:
@@ -188,7 +188,7 @@ def load_all_existing_data():
                 continue
 
             existing_hashes.add(unique_row_hash(r))
-            # If row needs PDF, add to rows_by_year for processing
+            # Only add rows needing PDF download to rows_by_year
             report_dl = r.get("PDF report save time", "").strip()
             if not report_dl:
                 try:
@@ -199,9 +199,8 @@ def load_all_existing_data():
                     rows_by_year[yr] = []
                 rows_by_year[yr].append(r)
                 pdf_resume_count += 1
-    logging.info(f"Loaded {len(existing_hashes)} existing results from Excel files")
-    if pdf_resume_count > 0:
-        logging.info(f"Found {pdf_resume_count} existing rows needing PDF download (resuming)")
+    if not silent:
+        logging.info(f"Loaded {len(existing_hashes)} existing results from Excel files")
     return existing_hashes, rows_by_year, pdf_resume_count
 
 
@@ -256,13 +255,62 @@ _CHART_ROWS = 16         # rows a 7.5cm chart occupies
 
 # Wide table column layouts: list of (start_col, end_col) per field
 _RESIT_LAYOUT  = [(1, 3), (4, 5), (6, 9), (10, 10), (11, 12)]
-_REBOOK_LAYOUT = [(1, 3), (4, 5), (6, 9), (10, 11), (12, 12)]
+_REBOOK_LAYOUT = [(1, 2), (3, 4), (5, 8), (9, 9), (10, 10), (11, 12)]
 _EXTRA_LAYOUT  = [(1, 3), (4, 5), (6, 10), (11, 12)]
 
 
 def _apply_col_widths(ws):
     for ci in range(1, _NUM_COLS + 1):
         ws.column_dimensions[get_column_letter(ci)].width = _COL_W.get(ci, 13)
+
+
+def _date_key(r):
+    """Parse Completed date from row dict, return datetime (or datetime.min if invalid)."""
+    try:
+        return datetime.strptime(r.get("Completed", ""), "%d/%m/%Y")
+    except (ValueError, TypeError):
+        return datetime.min
+
+
+def _group_by_candidate_exam(rows, include_name=False):
+    """Group rows by (Enrolment no., Test Name) or (Enrolment no., First name, Last name, Test Name).
+    Returns dict mapping key tuple to list of row dicts."""
+    pairs = defaultdict(list)
+    for rd in rows:
+        enrol = rd.get("Enrolment no.", "").strip()
+        test = rd.get("Test Name", "").strip()
+        if not enrol or not test:
+            continue
+        if include_name:
+            fname = rd.get("First name", "").strip()
+            lname = rd.get("Last name", "").strip()
+            pairs[(enrol, fname, lname, test)].append(rd)
+        else:
+            pairs[(enrol, test)].append(rd)
+    return pairs
+
+
+def _compute_monthly(rows):
+    """Compute monthly distribution from rows. Returns dict {month_int: {"count": int}}."""
+    monthly = {}
+    for rd in rows:
+        try:
+            mi = datetime.strptime(rd.get("Completed", ""), "%d/%m/%Y").month
+            if mi not in monthly:
+                monthly[mi] = {"count": 0}
+            monthly[mi]["count"] += 1
+        except (ValueError, TypeError):
+            pass
+    return monthly
+
+
+def _compute_centres(rows):
+    """Group rows by centre name. Returns defaultdict {centre_name: [rows]}."""
+    centres = defaultdict(list)
+    for rd in rows:
+        cn = rd.get("Centre Name", "").strip() or "Unknown Centre"
+        centres[cn].append(rd)
+    return centres
 
 
 def _exam_short(name):
@@ -433,51 +481,6 @@ def _exam_breakdown_chart(dws, exam_d_start, exam_d_end, width=15, height=7.5):
 
 # ── Compute helpers ───────────────────────────────────────────────────────
 
-def _compute_resit_data(rows):
-    """Return (resit_tracker, rebook_opps) from rows."""
-    pairs = defaultdict(list)
-    for rd in rows:
-        enrol = rd.get("Enrolment no.", "").strip()
-        test = rd.get("Test Name", "").strip()
-        if enrol and test:
-            pairs[(enrol, test)].append(rd)
-
-    resit_tracker = []
-    rebook_opps = []
-    def _date_key(r):
-        try:
-            return datetime.strptime(r.get("Completed", ""), "%d/%m/%Y")
-        except (ValueError, TypeError):
-            return datetime.min
-
-    for (enrol, test), attempts in pairs.items():
-        attempts.sort(key=_date_key)
-        latest = attempts[-1]
-        name = (f"{latest.get('First name', '')} "
-                f"{latest.get('Last name', '')}").strip()
-        result = latest.get("Result", "").strip()
-        centre = latest.get("Centre Name", "").strip()
-        if len(attempts) >= 2:
-            resit_tracker.append({
-                "name": name, "enrolment": enrol, "exam": test,
-                "attempts": len(attempts), "result": result, "centre": centre,
-            })
-        if result.lower() == "fail":
-            fail_date = latest.get("Completed", "")
-            try:
-                days = (datetime.now() - datetime.strptime(
-                    fail_date, "%d/%m/%Y")).days
-            except (ValueError, TypeError):
-                days = 0
-            rebook_opps.append({
-                "name": name, "enrolment": enrol, "exam": test,
-                "failed": fail_date, "days_ago": days, "centre": centre,
-            })
-
-    resit_tracker.sort(key=lambda x: x["attempts"], reverse=True)
-    rebook_opps.sort(key=lambda x: x["days_ago"], reverse=True)
-    return resit_tracker, rebook_opps
-
 
 def _compute_extra_time(rows):
     """Return list of dicts for candidates whose duration exceeds mode."""
@@ -532,10 +535,8 @@ def _compute_insights(rows, by_exam, monthly, centres, rebook_opps):
     if busiest[1]["count"] > 0:
         mi = busiest[0]
         cnt = busiest[1]["count"]
-        centre_count = len(centres)
         insights.append(
-            f'{_MONTHS_FULL[mi - 1]} was the busiest month - {cnt} sittings' 
-            + (f' across {centre_count} centres' if centre_count > 1 else ''))
+            f'{_MONTHS_FULL[mi - 1]} was the busiest month - {cnt} sittings')
 
     return insights
 
@@ -571,7 +572,7 @@ def _build_kpis(ws, row, kpis, layout=None):
     """Write KPI cards with grey card background and red top accent.
     layout = list of (start_col, end_col) per KPI. Returns next row."""
     if layout is None:
-        layout = [(1, 2), (3, 4), (5, 6), (7, 9), (10, 11), (12, 12)]
+        layout = [(1, 2), (3, 4), (5, 6), (7, 8), (9, 10), (11, 12)]
 
     for i, kpi in enumerate(kpis):
         if i >= len(layout):
@@ -611,18 +612,20 @@ def _build_kpis(ws, row, kpis, layout=None):
         vc = ws.cell(row=row + 1, column=sc, value=val)
         vc.font = val_font
         vc.fill = _KPI_FILL
-        vc.alignment = Alignment(horizontal='center', vertical='center')
+        vc.alignment = Alignment(horizontal='center', vertical='center',
+                                      wrap_text=True)
 
         # Subtitle row
         if sub:
             sc2 = ws.cell(row=row + 2, column=sc, value=sub)
             sc2.font = _KPI_SUB_FONT
             sc2.fill = _KPI_FILL
-            sc2.alignment = Alignment(horizontal='center', vertical='center')
+            sc2.alignment = Alignment(horizontal='center', vertical='center',
+                                          wrap_text=True)
 
     ws.row_dimensions[row].height = 18
-    ws.row_dimensions[row + 1].height = 30
-    ws.row_dimensions[row + 2].height = 16
+    ws.row_dimensions[row + 1].height = 38
+    ws.row_dimensions[row + 2].height = 20
     return row + 4
 
 
@@ -637,8 +640,9 @@ def _build_footer(ws, row, text):
 
 
 # ── Public entry-point ────────────────────────────────────────────────────
-def add_analytics_sheet(filepath, rows=None):
-    """Add/replace the Analytics sheet on an existing Excel file."""
+def add_analytics_sheet(filepath, rows=None, all_rows=None):
+    """Add/replace the Analytics sheet on an existing Excel file.
+    If all_rows is provided, rebook opportunities cross-reference all years."""
     if rows is None:
         rows = load_existing_results(filepath)
     if not rows:
@@ -647,63 +651,39 @@ def add_analytics_sheet(filepath, rows=None):
     try:
         if wb.active and wb.active.title not in ("Results", "Analytics"):
             wb.active.title = "Results"
-        _add_analytics_to_wb(wb, rows)
+        _add_analytics_to_wb(wb, rows, all_rows=all_rows)
         wb.save(filepath)
     finally:
         wb.close()
 
 
-# ── Main orchestrator ─────────────────────────────────────────────────────
-def _add_analytics_to_wb(wb, rows):
-    """Build the Analytics tab (single compact dashboard)."""
-    if not rows:
-        return
-
-    # Remove all non-Results tabs
-    for name in list(wb.sheetnames):
-        if name != "Results":
-            del wb[name]
-
-    # Split rows by centre
-    centres = defaultdict(list)
-    for rd in rows:
-        cn = rd.get("Centre Name", "").strip() or "Unknown Centre"
-        centres[cn].append(rd)
-
-    # Detect year
-    year = datetime.now().year
-    for rd in rows:
-        try:
-            year = datetime.strptime(rd.get("Completed", ""), "%d/%m/%Y").year
-            break
-        except (ValueError, TypeError):
-            pass
-
-    # Compute data
+# ── Shared year-level dashboard builder ───────────────────────────────────
+def _build_year_dashboard(wb, ws, rows, all_rows, year,
+                          chart_sheet_name, header_title, footer_text):
+    """Build a full year analytics dashboard on the given worksheet.
+    Used by both per-year Excel analytics and combined workbook year tabs."""
+    centres = _compute_centres(rows)
     total = len(rows)
     by_exam = _compute_by_exam(rows)
-    resit_tracker, rebook_opps = _compute_resit_data(rows)
     extra_time = _compute_extra_time(rows)
+    monthly = _compute_monthly(rows)
 
-    monthly = {}
-    for rd in rows:
-        try:
-            mi = datetime.strptime(rd.get("Completed", ""), "%d/%m/%Y").month
-            if mi not in monthly:
-                monthly[mi] = {"count": 0}
-            monthly[mi]["count"] += 1
-        except (ValueError, TypeError):
-            pass
+    rebook_source = all_rows if all_rows else rows
+    rebook_opps = _compute_rebook_opportunities(rebook_source, year_filter=year)
 
     customers = len({rd.get("Enrolment no.", "").strip() for rd in rows
                      if rd.get("Enrolment no.", "").strip()})
-    total_fails = sum(1 for rd in rows
-                      if rd.get("Result", "").strip().lower() == "fail")
-    resits_returned = len(resit_tracker)
-    resit_conv = (f"{round(resits_returned / total_fails * 100)}%"
-                  if total_fails else "N/A")
-    resit_sub = (f"{resits_returned} of {total_fails} returned"
-                 if total_fails else "No fails")
+
+    # Resit conversion (cross-year aware)
+    resits_returned, unique_fails = _compute_resit_conversion(rebook_source, year)
+    resit_conv = (f"{round(resits_returned / unique_fails * 100)}%"
+                  if unique_fails else "N/A")
+    resit_sub = (f"{resits_returned} of {unique_fails} returned"
+                 if unique_fails else "No fails")
+
+    rebook_count = len(rebook_opps)
+    rebook_sub = (f"{rebook_count} of {unique_fails} fails outstanding"
+                  if unique_fails else "No fails")
 
     top_exam = _exam_short(by_exam[0]["name"]) if by_exam else "N/A"
     top_exam_pct = round(by_exam[0]["count"] / total * 100) if by_exam and total else 0
@@ -717,10 +697,9 @@ def _add_analytics_to_wb(wb, rows):
     busiest_sub = f"{busiest_cnt} sittings ({busiest_pct}%)" if busiest_cnt else ""
 
     # ── Hidden chart-data sheet ───────────────────────────────────────
-    dws = wb.create_sheet("_ChartData")
+    dws = wb.create_sheet(chart_sheet_name)
     dws.sheet_state = 'hidden'
 
-    # Monthly data (rows 1-13)
     dws.cell(1, 1, "Month")
     dws.cell(1, 2, "Exams")
     for i in range(12):
@@ -728,7 +707,6 @@ def _add_analytics_to_wb(wb, rows):
         cnt = monthly.get(i + 1, {"count": 0})["count"]
         dws.cell(2 + i, 2, cnt if cnt else None)
 
-    # Exam data (rows 15+): one row per exam for horizontal bar chart
     exam_d_start = 15
     dws.cell(exam_d_start, 1, "Exam")
     dws.cell(exam_d_start, 2, "Count")
@@ -737,32 +715,22 @@ def _add_analytics_to_wb(wb, rows):
         dws.cell(exam_d_start + 1 + i, 2, ex["count"])
     exam_d_end = exam_d_start + len(by_exam)
 
-    # ── Analytics tab ─────────────────────────────────────────────────
-    ws = wb.create_sheet("Analytics", 1)
-    ws.sheet_properties.tabColor = _RED
-    ws.sheet_view.showGridLines = False
-
-    # Row 1: Header
-    r = _build_header(ws, "EVOLVE SECURE-ASSESS ANALYTICS",
+    # ── Header + KPIs ─────────────────────────────────────────────────
+    r = _build_header(ws, header_title,
                       f" All Centres ({len(centres)})", year)
 
-    # Row 3: OVERVIEW + KPIs (wide layout: Most Popular gets 3 cols)
     r = _section(ws, r, "OVERVIEW")
-    extra_candidates = len({et["enrolment"] for et in extra_time if et["enrolment"]})
-    extra_pct = round(extra_candidates / customers * 100) if customers else 0
-    extra_sub = f"{extra_candidates} of {customers} ({extra_pct}%)" if customers else ""
-    kpi_layout = [(1, 2), (3, 4), (5, 6), (7, 9), (10, 11), (12, 12)]
+    kpi_layout = [(1, 2), (3, 4), (5, 6), (7, 8), (9, 10), (11, 12)]
     r = _build_kpis(ws, r, [
         ("Total Exams", total),
         ("Unique Candidates", customers),
-        ("Extra Time Candidates", extra_candidates, extra_sub),
+        ("Resit Conversion", resit_conv, resit_sub),
         ("Most Popular Exam", top_exam, top_exam_sub),
         ("Busiest Month", _MONTHS_FULL[busiest_mi - 1], busiest_sub),
-        ("Resit Conversion", resit_conv, resit_sub),
+        ("Rebook Opportunities", rebook_count, rebook_sub),
     ], layout=kpi_layout)
 
     # ── Side-by-side charts ───────────────────────────────────────────
-    # Left: Monthly Volume (A-F), Right: Exam Breakdown (G-L)
     ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=6)
     ws.cell(row=r, column=1, value="MONTHLY VOLUME").font = _SECTION_FONT
     ws.merge_cells(start_row=r, start_column=7, end_row=r, end_column=12)
@@ -771,8 +739,6 @@ def _add_analytics_to_wb(wb, rows):
     r += 1
 
     chart_anchor_row = r
-
-    # Monthly volume chart (left) - with 25% headroom for data labels
     month_max = max((monthly.get(m, {"count": 0})["count"]
                      for m in range(1, 13)), default=0)
     ch_month = _bar_chart(
@@ -782,7 +748,6 @@ def _add_analytics_to_wb(wb, rows):
         y_max=int(month_max * 1.25) + 1 if month_max else None)
     ws.add_chart(ch_month, f"A{chart_anchor_row}")
 
-    # Exam breakdown chart (right) - horizontal bars with names on Y-axis
     if by_exam:
         ch_exam = _exam_breakdown_chart(
             dws, exam_d_start, exam_d_end,
@@ -792,7 +757,7 @@ def _add_analytics_to_wb(wb, rows):
     r = chart_anchor_row + _CHART_ROWS
     r += 1  # spacer
 
-    # ── Key Insights (top of text sections for visibility) ────────────
+    # ── Key Insights ──────────────────────────────────────────────────
     insights = _compute_insights(rows, by_exam, monthly, centres, rebook_opps)
     if insights:
         r = _section(ws, r, "KEY INSIGHTS")
@@ -806,15 +771,40 @@ def _add_analytics_to_wb(wb, rows):
             r += 1
         r += 1
 
+    # ── Rebook Opportunities (summary by exam) ────────────────────────
     r = _section(ws, r, "REBOOK OPPORTUNITIES")
     if rebook_opps:
+        exam_summary = defaultdict(lambda: {"count": 0, "total_days": 0})
+        for rb in rebook_opps:
+            es = exam_summary[rb["exam"]]
+            es["count"] += 1
+            es["total_days"] += rb["days_ago"]
+        summary_layout = [(1, 4), (5, 7), (8, 10), (11, 12)]
+        _wide_tbl_header(ws, r, ["Exam", "Candidates", "Avg Days Ago",
+                                  "% of Total"], summary_layout)
+        r += 1
+        for idx, (exam, s) in enumerate(sorted(exam_summary.items(),
+                                                key=lambda x: x[1]["count"],
+                                                reverse=True)):
+            avg_days = round(s["total_days"] / s["count"]) if s["count"] else 0
+            pct = f"{round(s['count'] / len(rebook_opps) * 100)}%"
+            _wide_tbl_row(ws, r, [_exam_short(exam), s["count"],
+                                   avg_days, pct],
+                          summary_layout, stripe=(idx % 2 == 1))
+            r += 1
+        r += 1
+
+        # ── Candidates to Rebook (detail table) ──────────────────────
+        r = _section(ws, r, "CANDIDATES TO REBOOK")
         _wide_tbl_header(ws, r, ["Candidate", "Enrolment", "Exam",
-                                  "Failed", "Days Ago"],
+                                  "Attempts", "Last Failed", "Days Ago"],
                          _REBOOK_LAYOUT)
         r += 1
         for idx, rb in enumerate(rebook_opps):
-            _wide_tbl_row(ws, r, [rb["name"], rb["enrolment"], rb["exam"],
-                                   rb["failed"], rb["days_ago"]],
+            _wide_tbl_row(ws, r, [rb["name"], rb["enrolment"],
+                                   _exam_short(rb["exam"]),
+                                   rb["attempts"],
+                                   rb["last_fail"], rb["days_ago"]],
                           _REBOOK_LAYOUT, stripe=(idx % 2 == 1))
             r += 1
     else:
@@ -825,24 +815,6 @@ def _add_analytics_to_wb(wb, rows):
                       "rebooked or passed on resit").font = _INSIGHT_FONT
         r += 1
     r += 1
-
-    failed_resits = [rt for rt in resit_tracker if rt["result"].lower() == "fail"]
-    if failed_resits:
-        r = _section(ws, r, "FAILED RESIT TRACKER")
-        _wide_tbl_header(ws, r, ["Candidate", "Enrolment", "Exam",
-                                  "Attempts", "Latest Result"],
-                         _RESIT_LAYOUT)
-        r += 1
-        for idx, rt in enumerate(failed_resits):
-            _wide_tbl_row(ws, r, [rt["name"], rt["enrolment"], rt["exam"],
-                                   rt["attempts"], rt["result"]],
-                          _RESIT_LAYOUT, stripe=(idx % 2 == 1))
-            rc = ws.cell(row=r, column=11)
-            rc.fill = PatternFill('solid', fgColor=_RED_BG)
-            rc.font = Font(bold=True, size=9, color=_RED_FG)
-            ws.cell(row=r, column=12).fill = PatternFill('solid', fgColor=_RED_BG)
-            r += 1
-        r += 1
 
     # ── Extra Time ────────────────────────────────────────────────────
     r = _section(ws, r, "EXTRA TIME CANDIDATES")
@@ -865,13 +837,44 @@ def _add_analytics_to_wb(wb, rows):
     r += 1
 
     # ── Footer ────────────────────────────────────────────────────────
+    _build_footer(ws, r, footer_text)
+    _apply_col_widths(ws)
+
+
+# ── Per-year Excel orchestrator ───────────────────────────────────────────
+def _add_analytics_to_wb(wb, rows, all_rows=None):
+    """Build the Analytics tab in a per-year Excel file."""
+    if not rows:
+        return
+
+    # Remove all non-Results tabs
+    for name in list(wb.sheetnames):
+        if name != "Results":
+            del wb[name]
+
+    # Detect year
+    year = datetime.now().year
+    for rd in rows:
+        try:
+            year = datetime.strptime(rd.get("Completed", ""), "%d/%m/%Y").year
+            break
+        except (ValueError, TypeError):
+            pass
+
+    ws = wb.create_sheet("Analytics", 1)
+    ws.sheet_properties.tabColor = _RED
+    ws.sheet_view.showGridLines = False
+
+    centres = _compute_centres(rows)
     centre_names = ", ".join(_short_centre_name(cn)
                              for cn in sorted(centres.keys()))
-    _build_footer(ws, r, f"Data: Results tab - {total} records - "
-                         f"{len(centres)} centre(s): {centre_names} - "
-                         f"Internal use - City & Guilds")
+    footer = (f"Data: Results tab - {len(rows)} records - "
+              f"{len(centres)} centre(s): {centre_names} - "
+              f"Internal use - City & Guilds")
 
-    _apply_col_widths(ws)
+    _build_year_dashboard(wb, ws, rows, all_rows, year,
+                          "_ChartData", "EVOLVE SECURE-ASSESS ANALYTICS",
+                          footer)
 
 
 def _compute_by_exam(rows):
@@ -901,3 +904,409 @@ def _compute_by_exam(rows):
         })
     result.sort(key=lambda x: x["count"], reverse=True)
     return result
+
+
+# =========================================================================
+# COMBINED ANALYTICS WORKBOOK - Cross-year aggregation
+# =========================================================================
+
+
+def _compute_resit_conversion(all_rows, year):
+    """Count how many unique candidate+exam combos that failed in `year`
+    went on to have at least one later attempt (in any year).
+    Returns (returned, total_unique_fails) so caller can compute the rate."""
+    pairs = _group_by_candidate_exam(all_rows, include_name=False)
+
+    returned = 0
+    total_unique_fails = 0
+    for (enrol, test), attempts in pairs.items():
+        attempts.sort(key=_date_key)
+        # Find fails in the target year
+        fails_in_year = [a for a in attempts
+                         if _date_key(a).year == year
+                         and a.get("Result", "").strip().lower() == "fail"]
+        if not fails_in_year:
+            continue
+        total_unique_fails += 1
+        # Check if there's any attempt AFTER the last fail in that year
+        last_fail_dt = _date_key(fails_in_year[-1])
+        has_later = any(_date_key(a) > last_fail_dt for a in attempts)
+        if has_later:
+            returned += 1
+    return returned, total_unique_fails
+
+
+def _compute_rebook_opportunities(all_rows, year_filter=None):
+    """Find candidates whose latest attempt for any exam is a fail - potential revenue.
+    Includes both single-attempt fails and multi-attempt fails (never passed).
+    If year_filter is set, only include candidates who had a fail in that year
+    and whose latest overall attempt is still a fail (i.e. they haven't rebooked
+    or passed in a later year).
+    Sorted by days since fail (most overdue at top)."""
+    pairs = _group_by_candidate_exam(all_rows, include_name=True)
+
+    rebooks = []
+    for (enrol, fname, lname, test), attempts in pairs.items():
+        attempts.sort(key=_date_key)
+        latest = attempts[-1]
+        latest_result = latest.get("Result", "").strip().lower()
+        if latest_result != "fail":
+            continue
+        # If year_filter is set, only include if the latest fail is in that year
+        if year_filter is not None:
+            if _date_key(latest).year != year_filter:
+                continue
+        fail_date = latest.get("Completed", "")
+        try:
+            days_ago = (datetime.now() - datetime.strptime(fail_date, "%d/%m/%Y")).days
+        except (ValueError, TypeError):
+            days_ago = 0
+        rebooks.append({
+            "name": f"{fname} {lname}".strip(),
+            "enrolment": enrol,
+            "exam": test,
+            "attempts": len(attempts),
+            "last_fail": fail_date,
+            "days_ago": days_ago,
+        })
+    rebooks.sort(key=lambda x: x["days_ago"], reverse=True)
+    return rebooks
+
+
+def _build_analytics_year_tab(wb, year_str, rows, all_rows=None):
+    """Build a single year analytics tab in the combined workbook."""
+    ws = wb.create_sheet(year_str)
+    ws.sheet_properties.tabColor = _RED
+    ws.sheet_view.showGridLines = False
+
+    year = int(year_str)
+    centres = _compute_centres(rows)
+    centre_names = ", ".join(_short_centre_name(cn)
+                             for cn in sorted(centres.keys()))
+    footer = (f"Data: {len(rows)} records - "
+              f"{len(centres)} centre(s): {centre_names}")
+
+    _build_year_dashboard(wb, ws, rows, all_rows, year,
+                          f"_{year_str}_ChartData",
+                          f"ANALYTICS - {year_str}", footer)
+
+
+def _build_analytics_overview_tab(wb, all_rows, rows_by_year):
+    """Build the Overview tab with cross-year aggregated analytics."""
+    ws = wb.active
+    ws.title = "Overview"
+    ws.sheet_properties.tabColor = _RED
+    ws.sheet_view.showGridLines = False
+
+    years_sorted = sorted(rows_by_year.keys(), reverse=True)
+    total = len(all_rows)
+    by_exam = _compute_by_exam(all_rows)
+    rebook_opps = _compute_rebook_opportunities(all_rows)
+
+    customers = len({rd.get("Enrolment no.", "").strip() for rd in all_rows
+                     if rd.get("Enrolment no.", "").strip()})
+    
+    total_fails = sum(1 for rd in all_rows
+                      if rd.get("Result", "").strip().lower() == "fail")
+
+    # Resit conversion: across all years, how many unique candidate+exam
+    # combos that failed went on to have at least one later attempt?
+    pairs = _group_by_candidate_exam(all_rows, include_name=False)
+    total_unique_fails = 0
+    resits_returned = 0
+    for (enrol, test), attempts in pairs.items():
+        attempts.sort(key=_date_key)
+        fails = [a for a in attempts
+                 if a.get("Result", "").strip().lower() == "fail"]
+        if not fails:
+            continue
+        total_unique_fails += 1
+        last_fail_dt = _date_key(fails[-1])
+        if any(_date_key(a) > last_fail_dt for a in attempts):
+            resits_returned += 1
+
+    resit_conv = (f"{round(resits_returned / total_unique_fails * 100)}%"
+                  if total_unique_fails else "N/A")
+    resit_sub = (f"{resits_returned} of {total_unique_fails} returned"
+                 if total_unique_fails else "No fails")
+
+    top_exam = _exam_short(by_exam[0]["name"]) if by_exam else "N/A"
+    top_exam_pct = round(by_exam[0]["count"] / total * 100) if by_exam and total else 0
+    top_exam_sub = f"{by_exam[0]['count']} sittings ({top_exam_pct}%)" if by_exam else ""
+
+    # Monthly data (all years combined)
+    monthly = _compute_monthly(all_rows)
+
+    busiest_mi = max(range(1, 13),
+                     key=lambda m: monthly.get(m, {"count": 0})["count"],
+                     default=1)
+    busiest_cnt = monthly.get(busiest_mi, {"count": 0})["count"]
+    busiest_pct = round(busiest_cnt / total * 100) if total else 0
+    busiest_sub = f"{busiest_cnt} sittings ({busiest_pct}%)" if busiest_cnt else ""
+
+    centres = _compute_centres(all_rows)
+
+    # Header
+    year_range = (f"{min(years_sorted)}-{max(years_sorted)}"
+                  if len(years_sorted) > 1 else str(years_sorted[0]))
+    r = _build_header(ws, "COMBINED ANALYTICS",
+                      f" All Centres ({len(centres)})", year_range)
+
+    # KPIs - same style as per-year analytics
+    r = _section(ws, r, "OVERVIEW")
+    total_pass = total - total_fails
+    pass_rate = f"{round(total_pass / total * 100)}%" if total else "N/A"
+    pass_sub = f"{total_pass} of {total}" if total else ""
+    kpi_layout = [(1, 2), (3, 4), (5, 6), (7, 8), (9, 10), (11, 12)]
+    r = _build_kpis(ws, r, [
+        ("Total Exams", total),
+        ("Unique Candidates", customers),
+        ("Overall Pass Rate", pass_rate, pass_sub),
+        ("Most Popular Exam", top_exam, top_exam_sub),
+        ("Busiest Month", _MONTHS_FULL[busiest_mi - 1], busiest_sub),
+        ("Resit Conversion", resit_conv, resit_sub),
+    ], layout=kpi_layout)
+
+    # ── Hidden chart data ────────────────────────────────────────────
+    dws = wb.create_sheet("_OverviewChartData")
+    dws.sheet_state = 'hidden'
+
+    # Year-over-year data (col 1-2)
+    dws.cell(1, 1, "Year")
+    dws.cell(1, 2, "Exams")
+    for i, yr in enumerate(sorted(years_sorted)):
+        yr_rows = rows_by_year[yr]
+        dws.cell(2 + i, 1, str(yr))
+        dws.cell(2 + i, 2, len(yr_rows))
+    yoy_end = 1 + len(years_sorted)
+
+    # Monthly data (col 4-5)
+    dws.cell(1, 4, "Month")
+    dws.cell(1, 5, "Exams")
+    for i in range(12):
+        dws.cell(2 + i, 4, _MONTHS[i])
+        cnt = monthly.get(i + 1, {"count": 0})["count"]
+        dws.cell(2 + i, 5, cnt if cnt else None)
+
+    # Exam data (row 16+, col 1-2)
+    exam_d_start = 16
+    dws.cell(exam_d_start, 1, "Exam")
+    dws.cell(exam_d_start, 2, "Count")
+    for i, ex in enumerate(by_exam):
+        dws.cell(exam_d_start + 1 + i, 1, _exam_chart_label(ex["name"]))
+        dws.cell(exam_d_start + 1 + i, 2, ex["count"])
+    exam_d_end = exam_d_start + len(by_exam)
+
+    # ── Row 1 charts: YoY volume (left) + Monthly volume (right) ──
+    ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=6)
+    ws.cell(row=r, column=1, value="YEAR-OVER-YEAR VOLUME").font = _SECTION_FONT
+    ws.merge_cells(start_row=r, start_column=7, end_row=r, end_column=12)
+    ws.cell(row=r, column=7, value="MONTHLY VOLUME (ALL YEARS)").font = _SECTION_FONT
+    ws.row_dimensions[r].height = 22
+    r += 1
+
+    chart_anchor_row = r
+    if len(years_sorted) > 0:
+        yoy_max = max(len(rows_by_year[y]) for y in years_sorted)
+        ch_yoy = _bar_chart(
+            Reference(dws, min_col=2, min_row=1, max_row=yoy_end),
+            Reference(dws, min_col=1, min_row=2, max_row=yoy_end),
+            fill_hex=_RED, width=_CHART_W, height=_CHART_H,
+            y_max=int(yoy_max * 1.25) + 1 if yoy_max else None)
+        ws.add_chart(ch_yoy, f"A{chart_anchor_row}")
+
+    month_max = max((monthly.get(m, {"count": 0})["count"]
+                     for m in range(1, 13)), default=0)
+    ch_month = _bar_chart(
+        Reference(dws, min_col=5, min_row=1, max_row=13),
+        Reference(dws, min_col=4, min_row=2, max_row=13),
+        fill_hex=_RED, width=_CHART_W, height=_CHART_H,
+        y_max=int(month_max * 1.25) + 1 if month_max else None)
+    ws.add_chart(ch_month, f"G{chart_anchor_row}")
+
+    r = chart_anchor_row + _CHART_ROWS
+
+    # ── Row 2 chart: Exam breakdown (full width, height scales with exam count)
+    r = _section(ws, r, "EXAM BREAKDOWN")
+    chart2_anchor = r
+    exam_count = len(by_exam)
+    exam_chart_h = max(_CHART_H, exam_count * 1.2)
+    exam_chart_rows = max(_CHART_ROWS, int(exam_chart_h / _CHART_H * _CHART_ROWS))
+    if by_exam:
+        ch_exam = _exam_breakdown_chart(
+            dws, exam_d_start, exam_d_end,
+            width=29, height=exam_chart_h)
+        ws.add_chart(ch_exam, f"A{chart2_anchor}")
+    r = chart2_anchor + exam_chart_rows
+
+    # ── YoY comparison table (no Centres column) ─────────────────
+    r = _section(ws, r, "YEAR-OVER-YEAR COMPARISON")
+    yoy_layout = [(1, 3), (4, 5), (6, 7), (8, 9), (10, 12)]
+    _wide_tbl_header(ws, r, ["Year", "Exams", "Candidates", "Pass Rate",
+                              "Avg Score"],
+                     yoy_layout)
+    r += 1
+    for idx, yr in enumerate(sorted(years_sorted, reverse=True)):
+        yr_rows = rows_by_year[yr]
+        yr_total = len(yr_rows)
+        yr_cust = len({rd.get("Enrolment no.", "").strip() for rd in yr_rows
+                       if rd.get("Enrolment no.", "").strip()})
+        yr_pass = sum(1 for rd in yr_rows
+                      if rd.get("Result", "").strip().lower() == "pass")
+        yr_rate = f"{round(yr_pass / yr_total * 100)}%" if yr_total else "N/A"
+        yr_scores = []
+        for rd in yr_rows:
+            try:
+                yr_scores.append(float(rd.get("Percent", "0").replace("%", "")))
+            except (ValueError, TypeError):
+                pass
+        yr_avg = f"{round(sum(yr_scores) / len(yr_scores), 1)}%" if yr_scores else "N/A"
+        _wide_tbl_row(ws, r, [str(yr), yr_total, yr_cust, yr_rate, yr_avg],
+                      yoy_layout, stripe=(idx % 2 == 1))
+        r += 1
+    r += 1
+
+    # ── Exam breakdown table ─────────────────────────────────────
+    r = _section(ws, r, "EXAM BREAKDOWN (ALL YEARS)")
+    exam_tbl_layout = [(1, 6), (7, 8), (9, 10), (11, 12)]
+    _wide_tbl_header(ws, r, ["Exam", "Sittings", "Pass Rate", "Avg Score"],
+                     exam_tbl_layout)
+    r += 1
+    for idx, ex in enumerate(by_exam):
+        _wide_tbl_row(ws, r, [
+            _exam_short(ex["name"]), ex["count"],
+            f"{ex['rate']}%", f"{ex['avg_score']}%"],
+            exam_tbl_layout, stripe=(idx % 2 == 1))
+        r += 1
+    r += 1
+
+    # ── Rebook Opportunities (summary by exam) ────────────────────────
+    r = _section(ws, r, "REBOOK OPPORTUNITIES")
+    if rebook_opps:
+        exam_summary = defaultdict(lambda: {"count": 0, "total_days": 0})
+        for rb in rebook_opps:
+            es = exam_summary[rb["exam"]]
+            es["count"] += 1
+            es["total_days"] += rb["days_ago"]
+        summary_layout = [(1, 4), (5, 7), (8, 10), (11, 12)]
+        _wide_tbl_header(ws, r, ["Exam", "Candidates", "Avg Days Ago",
+                                  "% of Total"], summary_layout)
+        r += 1
+        for idx, (exam, s) in enumerate(sorted(exam_summary.items(),
+                                                key=lambda x: x[1]["count"],
+                                                reverse=True)):
+            avg_days = round(s["total_days"] / s["count"]) if s["count"] else 0
+            pct = f"{round(s['count'] / len(rebook_opps) * 100)}%"
+            _wide_tbl_row(ws, r, [_exam_short(exam), s["count"],
+                                   avg_days, pct],
+                          summary_layout, stripe=(idx % 2 == 1))
+            r += 1
+        r += 1
+
+        # ── Candidates to Rebook (detail table) ──────────────────────
+        r = _section(ws, r, "CANDIDATES TO REBOOK")
+        _wide_tbl_header(ws, r, ["Candidate", "Enrolment", "Exam",
+                                  "Attempts", "Last Failed", "Days Ago"],
+                         _REBOOK_LAYOUT)
+        r += 1
+        for idx, rb in enumerate(rebook_opps):
+            _wide_tbl_row(ws, r, [rb["name"], rb["enrolment"],
+                                   _exam_short(rb["exam"]),
+                                   rb["attempts"],
+                                   rb["last_fail"], rb["days_ago"]],
+                          _REBOOK_LAYOUT, stripe=(idx % 2 == 1))
+            # Highlight days ago column since they're all actionable fails
+            for ci in [11, 12]:
+                cell = ws.cell(row=r, column=ci)
+                cell.fill = PatternFill('solid', fgColor=_RED_BG)
+                cell.font = Font(bold=True, size=9, color=_RED_FG)
+            r += 1
+    else:
+        ws.merge_cells(start_row=r, start_column=1,
+                       end_row=r, end_column=_NUM_COLS)
+        ws.cell(row=r, column=1,
+                value="  No rebook opportunities - all fails have "
+                      "rebooked or passed on resit").font = _INSIGHT_FONT
+        r += 1
+    r += 1
+
+    # Footer
+    centre_names = ", ".join(_short_centre_name(cn) for cn in sorted(centres.keys()))
+    _build_footer(ws, r, f"Data: {total} records across {len(years_sorted)} year(s) - "
+                          f"{len(centres)} centre(s): {centre_names} - "
+                          f"Generated: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+    _apply_col_widths(ws)
+
+
+def generate_analytics_workbook(all_rows=None, rows_by_year=None):
+    """Generate the combined analytics.xlsx with Overview + per-year tabs.
+    Only generates when 2+ years of data exist.
+    
+    Args:
+        all_rows: Optional pre-loaded list of all rows (avoids re-reading files)
+        rows_by_year: Optional pre-loaded dict {year: [rows]} (avoids re-reading files)
+    """
+    # If data not provided, load from files
+    if all_rows is None or rows_by_year is None:
+        year_files = list_year_excel_files()
+        if len(year_files) < 2:
+            logging.info("Need 2+ years of data for combined analytics, skipping")
+            return
+
+        all_rows = []
+        rows_by_year = {}
+        for year_str, filepath in year_files:
+            rows = load_existing_results(filepath)
+            if rows:
+                yr = int(year_str)
+                rows_by_year[yr] = rows
+                all_rows.extend(rows)
+
+    if not all_rows:
+        logging.info("No data found across year files, skipping analytics")
+        return
+    
+    if len(rows_by_year) < 2:
+        logging.info("Need 2+ years of data for combined analytics, skipping")
+        return
+
+    logging.debug(f"Generating analytics from {len(all_rows)} rows across "
+                  f"{len(rows_by_year)} year(s)...")
+
+    wb = Workbook()
+    try:
+        # Tab 1: Overview (aggregated)
+        _build_analytics_overview_tab(wb, all_rows, rows_by_year)
+
+        # Tab 2+: One per year (most recent first)
+        for yr in sorted(rows_by_year.keys(), reverse=True):
+            _build_analytics_year_tab(wb, str(yr), rows_by_year[yr], all_rows)
+
+        wb.save(ANALYTICS_FILE)
+        logging.debug(f"Analytics saved to {os.path.basename(ANALYTICS_FILE)}")
+    finally:
+        wb.close()
+
+
+def regenerate_analytics():
+    """Regenerate per-year and combined analytics from all year Excel files.
+    Returns True if analytics were generated, False if no data to process."""
+    all_rows = []
+    by_year = {}
+    for year_str, filepath in list_year_excel_files():
+        yr = int(year_str)
+        yr_rows = load_existing_results(filepath)
+        by_year[yr] = yr_rows
+        all_rows.extend(yr_rows)
+    if not all_rows:
+        return False
+    for year in by_year:
+        try:
+            add_analytics_sheet(get_excel_file_for_year(year), all_rows=all_rows)
+        except Exception as e:
+            logging.error(f"Failed to generate analytics for {year}: {e}")
+    try:
+        generate_analytics_workbook(all_rows=all_rows, rows_by_year=by_year)
+    except Exception as e:
+        logging.error(f"Failed to generate combined analytics: {e}")
+    return True
