@@ -1,4 +1,3 @@
-import time
 import logging
 from dataclasses import dataclass
 from datetime import datetime
@@ -31,6 +30,15 @@ class ProcessingStats:
     pdfs_downloaded: int = 0
     errors_encountered: int = 0
     pdfs_skipped: int = 0
+
+
+def compute_pdf_cutoff_date(months_back: int) -> datetime:
+    total_back = months_back + 1
+    now = datetime.now()
+    month = now.month - total_back
+    cutoff_year = now.year + (month - 1) // 12
+    cutoff_month = (month - 1) % 12 + 1
+    return datetime(cutoff_year, cutoff_month, 1)
 
 class EvolveAutomation:
     def __init__(self, headless: bool, master_password: str, selected_username: str = None, stop_event=None,
@@ -232,12 +240,7 @@ class EvolveAutomation:
         # trying to select rows not visible in the table.
         # The E-volve calendar opens one month behind current, then navigates
         # back months_back more, so the effective range is months_back + 1.
-        now = datetime.now()
-        total_back = self._months_back + 1
-        m = now.month - total_back
-        cutoff_year = now.year + (m - 1) // 12
-        cutoff_month = (m - 1) % 12 + 1
-        cutoff = datetime(cutoff_year, cutoff_month, 1)
+        cutoff = compute_pdf_cutoff_date(self._months_back)
 
         pdf_needed = []
         skipped = 0

@@ -5,7 +5,7 @@ import json
 import logging
 from datetime import datetime
 
-APP_VER = "v1.3.1"
+APP_VER = "v1.3.2"
 
 if getattr(sys, 'frozen', False):
     # Running as a PyInstaller bundled .exe - use the exe's directory

@@ -4,30 +4,51 @@ All notable changes to E-volve SecureAssess Automation are documented in this fi
 
 ---
 
+## [v1.3.2] - 2026-04-15
+
+### Fixed
+- **Scheduler Tk thread safety** (`gui_tk.py`) - scheduler polling now uses persisted plain-Python schedule state instead of reading Tk variables from the daemon thread
+- **Silent scheduler failures** (`gui_tk.py`) - scheduler exceptions now log at debug level instead of being swallowed silently
+- **Notification icon fallback** (`gui_tk.py`) - `_notify_icon_path()` now depends on Pillow availability instead of tray availability, so toast icon generation uses the correct capability check
+- **Analytics button visibility** (`gui_tk.py`) - Quick Open analytics visibility now follows real discovered year folders instead of an always-true current-year check
+- **Completion timing guard** (`gui_tk.py`) - `_on_complete()` now handles a missing `_run_start_time` defensively instead of assuming it always exists
+
+### Changed
+- **Tray menu year labels** (`gui_tk.py`) - "Open Excel" and "Open Reports" show the current year suffix (for example, "Open Excel (2026)") when 2+ years of data exist
+- **Desktop shortcut creation** (`gui_tk.py`) - runs in a background thread so the GUI no longer freezes; replaced VBScript/cscript with PowerShell and `CREATE_NO_WINDOW` to eliminate the console flash
+- **Version surfaces** (`config.py`, `gui_tk.py`, `main.py`) - centralized `APP_VER` now reflects `v1.3.2` across the codebase, GUI text, and runtime logging
+- **PDF cutoff helper** (`main.py`) - extracted `compute_pdf_cutoff_date()` from `_process_page_pdfs()` without changing the existing `months_back + 1` behavior
+- **Operational debug logging** (`gui_tk.py`) - tray tooltip, tray shutdown, and update-check fallbacks now emit debug logs instead of failing quietly
+
+### Removed
+- **Dead code and unused parameters** (`main.py`, `excel_utils.py`, `selenium_utils.py`) - removed the unused `time` import, `_RESIT_LAYOUT`, the unused extra-time `centre` field, the unused `centres` insight parameter, the unused `timeout` iframe parameter, and the unread `real_rows` counter
+
+---
+
 ## [v1.3.1] - 2026-04-15
 
 ### Added
-- **Combined analytics workbook** (`analytics.xlsx`) - Overview tab with cross-year KPIs (total exams, candidates, pass rate, resit conversion, most popular exam, busiest month), year-over-year volume chart, monthly volume chart, exam breakdown, year comparison table, rebook opportunities, and candidates to rebook. Per-year tabs mirror the per-year Excel analytics with identical sections. Generated when 2+ years of data exist. Lock check prevents data corruption if `analytics.xlsx` is open in Excel during automation
-- **Configurable date range** - dropdown in Settings from Last month to Last 2.5 years (resets each session)
-- **Skip PDF downloads** - toggle in Settings to skip PDF report downloads (resets each session)
-- **Pagination recovery** - detects when E-volve serves duplicate pages and applies 3-step recovery (wait and re-read, refresh table, stop early with warning)
-- **Analytics button** - Quick Open card button opens per-year Excel with 1 year of data, combined analytics with 2+. Disabled during automation runs
+- **Combined analytics workbook** (`excel_utils.py`) - `analytics.xlsx` with Overview tab: cross-year KPIs (total exams, candidates, pass rate, resit conversion, most popular exam, busiest month), year-over-year volume chart, monthly volume chart, exam breakdown, year comparison table, rebook opportunities, and candidates to rebook. Per-year tabs mirror the per-year Excel analytics with identical sections. Generated when 2+ years of data exist. Lock check prevents data corruption if `analytics.xlsx` is open in Excel during automation
+- **Configurable date range** (`gui_tk.py`, `selenium_utils.py`) - dropdown in Settings from Last month to Last 2.5 years (resets each session)
+- **Skip PDF downloads** (`gui_tk.py`, `main.py`) - toggle in Settings to skip PDF report downloads (resets each session)
+- **Pagination recovery** (`selenium_utils.py`) - detects when E-volve serves duplicate pages and applies 3-step recovery (wait and re-read, refresh table, stop early with warning)
+- **Analytics button** (`gui_tk.py`) - Quick Open card button opens per-year Excel with 1 year of data, combined analytics with 2+. Disabled during automation runs
 
 ### Changed
-- **Renamed `exam_results.xlsx`** to `exam_results_YYYY.xlsx` - allows opening multiple years in Excel simultaneously
-- **Always show lock screen on startup** - removed auto read-only mode for security; lock screen shown every launch
-- **Unified analytics builder** - per-year Excel analytics and combined workbook year tabs now share the same `_build_year_dashboard` function, ensuring consistent sections (overview, charts, key insights, rebook opportunities, candidates to rebook, extra time)
-- **Rebook section headers** - split into "REBOOK OPPORTUNITIES" summary table and "CANDIDATES TO REBOOK" detail table with separate section headers
-- **KPI cards** - added text wrapping for long exam names and increased row heights for subtitle visibility
-- **Scraping resilience** - `parse_results_table` and `click_next_page` retry up to 3 times on stale element errors. Date filter overlay explicitly dismissed after selection
-- **Log messages** - clearer status: "browser not visible" (headless mode), "Loaded N previous results" (resume), "Checking page N of M" (scraping), "Downloading PDF" (download progress)
-- **Scheduled runs** tracked with `scheduled=True` parameter for clearer log output
-- **Toast notification errors** logged at debug level instead of silently swallowed
-- **Start with Windows toggle** - no longer auto-detects existing shortcut; uses saved setting (default off)
-- **Analytics on stop** - analytics now regenerates when new rows are added or PDFs are downloaded, including on early stop and PDF-only resume runs
-- **PDF date-range skip** - PDF downloads skip rows outside the current date filter range instead of silently failing to find them in the table
-- Moved `handle_duplicate_page` to `selenium_utils`, `regenerate_analytics` to `excel_utils`, `download_pdf` to `parsing_utils` - `main.py` is now pure orchestration
-- Removed dead code: `_compute_resit_data` (unused return values), `_compute_cross_year_resits` (never called)
+- **Renamed `exam_results.xlsx`** (`config.py`) - now `exam_results_YYYY.xlsx`, allows opening multiple years in Excel simultaneously
+- **Always show lock screen on startup** (`gui_tk.py`) - removed auto read-only mode for security; lock screen shown every launch
+- **Unified analytics builder** (`excel_utils.py`) - per-year Excel analytics and combined workbook year tabs now share the same `_build_year_dashboard` function, ensuring consistent sections (overview, charts, key insights, rebook opportunities, candidates to rebook, extra time)
+- **Rebook section headers** (`excel_utils.py`) - split into "REBOOK OPPORTUNITIES" summary table and "CANDIDATES TO REBOOK" detail table with separate section headers
+- **KPI cards** (`excel_utils.py`) - added text wrapping for long exam names and increased row heights for subtitle visibility
+- **Scraping resilience** (`selenium_utils.py`) - `parse_results_table` and `click_next_page` retry up to 3 times on stale element errors. Date filter overlay explicitly dismissed after selection
+- **Log messages** (`main.py`, `selenium_utils.py`) - clearer status: "browser not visible" (headless mode), "Loaded N previous results" (resume), "Checking page N of M" (scraping), "Downloading PDF" (download progress)
+- **Scheduled runs** (`gui_tk.py`, `main.py`) - tracked with `scheduled=True` parameter for clearer log output
+- **Toast notification errors** (`gui_tk.py`) - logged at debug level instead of silently swallowed
+- **Start with Windows toggle** (`gui_tk.py`) - no longer auto-detects existing shortcut; uses saved setting (default off)
+- **Analytics on stop** (`main.py`) - analytics now regenerates when new rows are added or PDFs are downloaded, including on early stop and PDF-only resume runs
+- **PDF date-range skip** (`main.py`) - PDF downloads skip rows outside the current date filter range instead of silently failing to find them in the table
+- Moved `handle_duplicate_page` to `selenium_utils.py`, `regenerate_analytics` to `excel_utils.py`, `download_pdf` to `parsing_utils.py` - `main.py` is now pure orchestration
+- Removed dead code (`excel_utils.py`): `_compute_resit_data` (unused return values), `_compute_cross_year_resits` (never called)
 
 ---
 

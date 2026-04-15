@@ -9,6 +9,9 @@ import re
 import json
 import logging
 import shutil
+import subprocess
+import sys
+import tempfile
 import time
 import threading
 import tkinter as tk
@@ -146,6 +149,7 @@ class EvolveGUI:
         self._done_accounts  = 0
         self._acct_progress  = 0.0
         self._acct_pages     = 1
+        self._run_start_time = 0.0
 
         self.root = ctk.CTk()
         self.root.title(f"{APP_TITLE} - Unofficial Tool")
@@ -163,6 +167,8 @@ class EvolveGUI:
         self._date_range = ctk.StringVar(value="Last month")
         self._download_pdfs = ctk.BooleanVar(value=True)
         self._tray_icon = None
+        self._scheduler_enabled_state = bool(self._settings.get("schedule_enabled", False))
+        self._scheduler_time_state = str(self._settings.get("schedule_time", "")).strip()
         self._scheduler_last_fired = set()
         self._update_checked = False
 
@@ -1162,6 +1168,8 @@ class EvolveGUI:
         self._settings["schedule_enabled"] = self._sched_enabled.get()
         self._settings["schedule_time"] = self._sched_time.get()
         self._settings["minimize_to_tray"] = self._minimize_to_tray.get()
+        self._scheduler_enabled_state = self._settings["schedule_enabled"]
+        self._scheduler_time_state = str(self._settings["schedule_time"]).strip()
         # date_range and download_pdfs are intentionally NOT persisted -
         # they reset to defaults (Last month + PDFs on) each session
         save_settings(self._settings)
@@ -1177,12 +1185,22 @@ class EvolveGUI:
                     (32, 32), _PILImage.LANCZOS)
             except Exception:
                 icon_img = _PILImage.new("RGBA", (32, 32), (227, 6, 19, 255))
+            def _excel_label(item):
+                years = list_year_folders()
+                if len(years) > 1:
+                    return f"Open Excel ({datetime.now().year})"
+                return "Open Excel"
+            def _reports_label(item):
+                years = list_year_folders()
+                if len(years) > 1:
+                    return f"Open Reports ({datetime.now().year})"
+                return "Open Reports"
             menu = pystray.Menu(
                 pystray.MenuItem("Open E-volve Automation", self._tray_open,
                                  default=True),
                 pystray.Menu.SEPARATOR,
-                pystray.MenuItem("Open Excel", self._tray_open_excel),
-                pystray.MenuItem("Open Reports", self._tray_open_reports),
+                pystray.MenuItem(_excel_label, self._tray_open_excel),
+                pystray.MenuItem(_reports_label, self._tray_open_reports),
                 pystray.Menu.SEPARATOR,
                 pystray.MenuItem("Run Now", self._tray_run,
                                  visible=lambda item: bool(self.master_password)),
@@ -1205,8 +1223,8 @@ class EvolveGUI:
                 pdfs = d.get("pdfs", 0)
                 if ts:
                     return f"{APP_TITLE}\nLast run: {ts} | {rows} results, {pdfs} PDFs"
-        except Exception:
-            pass
+        except Exception as e:
+            logging.debug(f"Failed to build tray tooltip: {e}")
         return APP_TITLE
 
     def _show_tray(self):
@@ -1227,9 +1245,10 @@ class EvolveGUI:
         if self._tray_icon is not None:
             try:
                 self._tray_icon.stop()
+                # Allow pystray time to tear down the icon cleanly before clearing the handle.
                 time.sleep(0.1)
-            except Exception:
-                pass
+            except Exception as e:
+                logging.debug(f"Failed to stop tray icon: {e}")
             self._tray_icon = None
 
     def _tray_open(self, icon=None, item=None):
@@ -1290,8 +1309,8 @@ class EvolveGUI:
         # so a restart doesn't re-trigger a run that already happened.
         today = datetime.now().strftime("%Y-%m-%d")
         now_hm = datetime.now().strftime("%H:%M")
-        sched_time = self._sched_time.get().strip()
-        if self._validate_time(sched_time) and now_hm > sched_time:
+        sched_time = self._scheduler_time_state
+        if self._scheduler_enabled_state and self._validate_time(sched_time) and now_hm > sched_time:
             self._scheduler_last_fired.add(f"{today}_{sched_time}")
         t = threading.Thread(target=self._scheduler_loop, daemon=True)
         t.start()
@@ -1300,10 +1319,10 @@ class EvolveGUI:
         """Poll every 30s, fire automation when scheduled time matches current HH:MM."""
         while True:
             try:
-                if self._sched_enabled.get():
+                if self._scheduler_enabled_state:
                     now_hm = datetime.now().strftime("%H:%M")
                     today = datetime.now().strftime("%Y-%m-%d")
-                    sched_time = self._sched_time.get().strip()
+                    sched_time = self._scheduler_time_state
                     if self._validate_time(sched_time) and sched_time == now_hm:
                         fire_key = f"{today}_{sched_time}"
                         if fire_key not in self._scheduler_last_fired:
@@ -1323,8 +1342,8 @@ class EvolveGUI:
                     # Clean up old fire keys (keep only today's entries)
                     self._scheduler_last_fired = {
                         k for k in self._scheduler_last_fired if k.startswith(today)}
-            except Exception:
-                pass
+            except Exception as e:
+                logging.debug(f"Scheduler loop error: {e}")
             time.sleep(30)
 
     @staticmethod
@@ -1358,10 +1377,9 @@ class EvolveGUI:
     @staticmethod
     def _notify_icon_path():
         """Return a hi-res PNG path for notifications, extracting largest frame from ICO."""
-        if not os.path.exists(ICO_PATH) or not _HAS_TRAY:
+        if not os.path.exists(ICO_PATH) or _PILImage is None:
             return os.path.abspath(ICO_PATH) if os.path.exists(ICO_PATH) else ""
         try:
-            import tempfile
             png = os.path.join(tempfile.gettempdir(), "evolve_notify_icon.png")
             ico_mtime = os.path.getmtime(ICO_PATH)
             png_mtime = os.path.getmtime(png) if os.path.exists(png) else 0
@@ -1415,31 +1433,31 @@ class EvolveGUI:
                 if lv > cv:
                     self.root.after(0, lambda: self._log(
                         f"Update available: {latest} (current: {APP_VER})"))
-            except Exception:
-                pass
+            except Exception as e:
+                logging.debug(f"Update check failed: {e}")
         threading.Thread(target=_worker, daemon=True).start()
 
     # ========================================================= DESKTOP SHORTCUT
     def _create_desktop_shortcut(self):
-        """Create a desktop shortcut with messagebox feedback."""
-        try:
-            desktop = os.path.join(os.environ["USERPROFILE"], "Desktop")
-            lnk = os.path.join(desktop, "E-volve Automation.lnk")
-            if os.path.exists(lnk):
-                messagebox.showinfo("Desktop Shortcut",
-                                    "Shortcut already exists on your Desktop.")
-                return
-            self._create_shortcut_at(desktop)
+        """Create a desktop shortcut in a background thread with messagebox feedback."""
+        desktop = os.path.join(os.environ["USERPROFILE"], "Desktop")
+        lnk = os.path.join(desktop, "E-volve Automation.lnk")
+        if os.path.exists(lnk):
             messagebox.showinfo("Desktop Shortcut",
-                                "Shortcut created on your Desktop.")
-        except Exception as e:
-            messagebox.showerror("Desktop Shortcut", f"Failed: {e}")
+                                "Shortcut already exists on your Desktop.")
+            return
+        def _worker():
+            try:
+                self._create_shortcut_at(desktop)
+                self.root.after(0, lambda: messagebox.showinfo(
+                    "Desktop Shortcut", "Shortcut created on your Desktop."))
+            except Exception as e:
+                self.root.after(0, lambda e=e: messagebox.showerror(
+                    "Desktop Shortcut", f"Failed: {e}"))
+        threading.Thread(target=_worker, daemon=True).start()
 
     def _create_shortcut_at(self, folder):
-        """Create a Windows shortcut (.lnk) to this app in the given folder using VBScript."""
-        import sys
-        import subprocess
-        import tempfile
+        """Create a Windows shortcut (.lnk) to this app in the given folder."""
         if getattr(sys, 'frozen', False):
             target = sys.executable
         else:
@@ -1449,32 +1467,24 @@ class EvolveGUI:
             ico = os.path.join(sys._MEIPASS, "evolve_results_automation", "app.ico")
         else:
             ico = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app.ico")
-        vbs = (
-            f'Set s=CreateObject("WScript.Shell")\n'
-            f'Set sc=s.CreateShortcut("{lnk}")\n'
-            f'sc.TargetPath="{target}"\n'
-            f'sc.WorkingDirectory="{os.path.dirname(target)}"\n'
-            f'sc.IconLocation="{ico},0"\n'
-            f'sc.Save\n'
+        ps = (
+            f'$s=(New-Object -COM WScript.Shell).CreateShortcut("{lnk}");'
+            f'$s.TargetPath="{target}";'
+            f'$s.WorkingDirectory="{os.path.dirname(target)}";'
+            f'$s.IconLocation="{ico},0";'
+            f'$s.Save()'
         )
-        fd, tmp = tempfile.mkstemp(suffix=".vbs")
-        try:
-            os.write(fd, vbs.encode())
-            os.close(fd)
-            subprocess.run(["cscript", "//nologo", tmp], check=True,
-                           capture_output=True, timeout=10)
-        finally:
-            try:
-                os.unlink(tmp)
-            except OSError:
-                pass
+        subprocess.run(["powershell", "-NoProfile", "-Command", ps],
+                       check=True, capture_output=True, timeout=10,
+                       creationflags=subprocess.CREATE_NO_WINDOW)
 
     # ========================================================= FILE HELPERS
     def _refresh_qo_years(self):
         """Refresh the Quick Open year dropdown to include any newly created year folders."""
         try:
             cur_year = str(datetime.now().year)
-            year_dirs = list_year_folders()
+            actual_year_dirs = list_year_folders()
+            year_dirs = list(actual_year_dirs)
             if cur_year not in year_dirs:
                 year_dirs.insert(0, cur_year)
             self._qo_values = year_dirs
@@ -1482,7 +1492,7 @@ class EvolveGUI:
                 self._qo_year.set(cur_year)
             # Show/hide Analytics button based on year count (show if >= 1 year)
             if hasattr(self, '_analytics_btn'):
-                if len(year_dirs) >= 1:
+                if actual_year_dirs:
                     self._analytics_btn.pack(side="left", padx=(S8, 0))
                 else:
                     self._analytics_btn.pack_forget()
@@ -2004,7 +2014,7 @@ class EvolveGUI:
         self._reset_controls()
         self._set_progress(1.0)
         self._set_status("Completed", SUCCESS)
-        elapsed = int(time.time() - self._run_start_time)
+        elapsed = int(time.time() - self._run_start_time) if self._run_start_time else 0
         mins, secs = divmod(elapsed, 60)
         dur = f"{mins}m {secs}s" if mins else f"{secs}s"
         self._log(f"Completed in {dur}")

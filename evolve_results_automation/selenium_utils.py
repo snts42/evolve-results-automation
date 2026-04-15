@@ -91,7 +91,7 @@ def login(driver, username: str, password: str):
         raise Exception(f"Login failed for {username}: {error_text}")
     logging.info("Login submitted")
 
-def switch_to_results_iframe(driver, wait=10, timeout=15):
+def switch_to_results_iframe(driver, wait=10):
     time.sleep(wait)
     iframe = safe_find(driver, By.ID, "TestAdministrationResultsFrame")
     driver.switch_to.frame(iframe)
@@ -108,12 +108,10 @@ def parse_results_table(driver, existing_hashes):
             rows = driver.find_elements(By.XPATH, ROW_XPATH)
             all_rows = []
             page_hashes = set()
-            real_rows = 0
             for row in rows:
                 cells = row.find_elements(By.TAG_NAME, "td")
                 if not any(cell.text.strip() for cell in cells) or len(cells) < 12:
                     continue
-                real_rows += 1
                 data = {
                     col: cells[ci].text.strip() for col, ci in COL_INDEX.items()
                 }

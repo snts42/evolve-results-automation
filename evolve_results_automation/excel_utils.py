@@ -254,7 +254,6 @@ _CHART_H = 7.5           # cm height
 _CHART_ROWS = 16         # rows a 7.5cm chart occupies
 
 # Wide table column layouts: list of (start_col, end_col) per field
-_RESIT_LAYOUT  = [(1, 3), (4, 5), (6, 9), (10, 10), (11, 12)]
 _REBOOK_LAYOUT = [(1, 2), (3, 4), (5, 8), (9, 9), (10, 10), (11, 12)]
 _EXTRA_LAYOUT  = [(1, 3), (4, 5), (6, 10), (11, 12)]
 
@@ -509,12 +508,11 @@ def _compute_extra_time(rows):
                 result.append({
                     "name": name, "enrolment": enrol, "exam": test,
                     "extra_pct": f"+{round((dur / mode_dur - 1) * 100)}%",
-                    "centre": rd.get("Centre Name", "").strip(),
                 })
     return result
 
 
-def _compute_insights(rows, by_exam, monthly, centres, rebook_opps):
+def _compute_insights(rows, by_exam, monthly, rebook_opps):
     """Generate auto-insight bullet strings."""
     total = len(rows)
     insights = []
@@ -758,7 +756,7 @@ def _build_year_dashboard(wb, ws, rows, all_rows, year,
     r += 1  # spacer
 
     # ── Key Insights ──────────────────────────────────────────────────
-    insights = _compute_insights(rows, by_exam, monthly, centres, rebook_opps)
+    insights = _compute_insights(rows, by_exam, monthly, rebook_opps)
     if insights:
         r = _section(ws, r, "KEY INSIGHTS")
         for ins in insights:
