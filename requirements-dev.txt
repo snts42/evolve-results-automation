@@ -1,0 +1,6 @@
+# Development-only dependencies (not bundled with the release EXE).
+# Install with: pip install -r requirements-dev.txt
+#
+# Run the test suite with: python -m pytest tests/ -v
+
+pytest==8.3.3

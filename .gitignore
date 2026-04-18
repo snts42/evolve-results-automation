@@ -11,6 +11,9 @@ dist*/
 # Matches any 4-digit year folder at project root like 2024/, 2025/, 2026/ etc.
 [12][0-9][0-9][0-9]/
 
+# Local backups of real exam data (never commit)
+_backup_*
+
 # Internal docs (not published to repo)
 TODO.md
 RELEASE_NOTES_*.md
@@ -18,12 +21,12 @@ RELEASE_NOTES_*.md
 # Dev workflow artifacts
 COMMIT_MSG_batch*.md
 COMMIT_MSG.tmp
-dashboard_structure_final.md
-dash_err.txt
-check_excel.py
 
 # Generated data
 analytics.xlsx
+analytics.xlsx.bak
+*.xlsx.tmp
+~$*.xlsx
 last_run.json
 settings.json
 evolve.lock
@@ -31,3 +34,4 @@ evolve.lock
 # Python
 __pycache__/
 *.pyc
+.pytest_cache/

@@ -24,7 +24,7 @@ from tkinter import messagebox
 from .config import (APP_VER, ENCRYPTED_CREDENTIALS_FILE, BASE_DIR,
                      ANALYTICS_FILE, get_excel_file_for_year,
                      get_reports_base_for_year, get_logs_base_for_year,
-                     load_settings, save_settings,
+                     load_settings, save_settings, atomic_json_write,
                      list_year_folders, list_year_excel_files)
 from .secure_credentials import SecureCredentialManager
 
@@ -1364,14 +1364,14 @@ class EvolveGUI:
             try:
                 os.makedirs(_STARTUP_FOLDER, exist_ok=True)
                 self._create_shortcut_at(_STARTUP_FOLDER)
-            except Exception:
-                pass
+            except Exception as e:
+                logging.debug(f"Could not create startup shortcut: {e}")
         else:
             try:
                 if os.path.exists(_STARTUP_LNK):
                     os.remove(_STARTUP_LNK)
-            except OSError:
-                pass
+            except OSError as e:
+                logging.debug(f"Could not remove startup shortcut: {e}")
 
     # ========================================================= TOAST NOTIFICATIONS
     @staticmethod
@@ -1421,9 +1421,8 @@ class EvolveGUI:
                 import json as _json
                 url = "https://api.github.com/repos/snts42/evolve-results-automation/releases/latest"
                 req = Request(url, headers={"User-Agent": "Mozilla/5.0"})
-                resp = urlopen(req, timeout=10)
-                data = _json.loads(resp.read().decode())
-                resp.close()
+                with urlopen(req, timeout=10) as resp:
+                    data = _json.loads(resp.read().decode())
                 latest = data.get("tag_name", "")
                 try:
                     lv = tuple(int(x) for x in latest.lstrip("v").split("."))
@@ -1496,8 +1495,8 @@ class EvolveGUI:
                     self._analytics_btn.pack(side="left", padx=(S8, 0))
                 else:
                     self._analytics_btn.pack_forget()
-        except Exception:
-            pass
+        except Exception as e:
+            logging.debug(f"Could not refresh year folders: {e}")
 
     def _open_analytics(self):
         # If only 1 year of data, open that year's Excel (which has Analytics tab)
@@ -1581,10 +1580,9 @@ class EvolveGUI:
                 "pdfs": stats.pdfs_downloaded,
                 "errors": stats.errors_encountered,
             })
-            with open(LAST_RUN_FILE, "w") as fh:
-                json.dump(data, fh)
-        except Exception:
-            pass
+            atomic_json_write(LAST_RUN_FILE, data)
+        except Exception as e:
+            logging.debug(f"Could not save last run: {e}")
 
     # ========================================================= DROPDOWN POPUP
     def _show_popup(self, popup_attr, anchor, values, on_pick,
@@ -1855,7 +1853,7 @@ class EvolveGUI:
 
     def _worker(self, headless, selected_username, months_back=1, skip_pdfs=False):
         try:
-            from .main import EvolveAutomation
+            from .main import EvolveAutomation as _Automation
 
             class _QH(logging.Handler):
                 def __init__(self, q):
@@ -1874,7 +1872,7 @@ class EvolveGUI:
 
             scheduled = getattr(self, '_run_scheduled', False)
 
-            automation = EvolveAutomation(
+            automation = _Automation(
                 headless, self.master_password, selected_username,
                 stop_event=self._stop_event,
                 months_back=months_back, skip_pdfs=skip_pdfs,
@@ -2094,10 +2092,9 @@ class EvolveGUI:
             if not _d.get("tray_first_close_shown", False):
                 _d["tray_first_close_shown"] = True
                 try:
-                    with open(LAST_RUN_FILE, "w") as _fh:
-                        json.dump(_d, _fh)
-                except Exception:
-                    pass
+                    atomic_json_write(LAST_RUN_FILE, _d)
+                except Exception as e:
+                    logging.debug(f"Could not save tray_first_close_shown flag: {e}")
                 self.root.after(800, lambda: self._notify(
                     "Still running",
                     "E-volve Automation is in the system tray. "
@@ -2164,6 +2161,9 @@ class EvolveGUI:
         import msvcrt
         lock_path = os.path.join(BASE_DIR, "evolve.lock")
         try:
+            # Intentional: file handle is never closed - the OS releases the
+            # lock automatically when the process exits, which is exactly the
+            # single-instance guard we want. Do not add a .close() here.
             self._instance_lock_fh = open(lock_path, "w")
             msvcrt.locking(self._instance_lock_fh.fileno(), msvcrt.LK_NBLCK, 1)
             return True

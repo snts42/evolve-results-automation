@@ -142,9 +142,10 @@ class EvolveAutomation:
     def _preflight_check(self):
         """Test connectivity to E-volve before starting automation."""
         try:
-            resp = urlopen(Request(RESULTS_URL.split('#')[0],
-                                   headers={"User-Agent": "Mozilla/5.0"}), timeout=10)
-            resp.close()
+            req = Request(RESULTS_URL.split('#')[0],
+                          headers={"User-Agent": "Mozilla/5.0"})
+            with urlopen(req, timeout=10):
+                pass
         except (URLError, OSError) as e:
             raise ConnectionError(
                 f"Cannot reach E-volve. Check your internet connection. ({e})") from e
@@ -174,6 +175,7 @@ class EvolveAutomation:
         logging.info(f"Loaded {len(existing_hashes)} previous results, {total_pages} page(s) to check{pdf_note}")
 
         prev_page_hashes = set()
+        scrape_fn = lambda d, p: self._scrape_page(d, p, existing_hashes, rows_by_year)
         for page_num in range(1, total_pages + 1):
             if self._stop_event and self._stop_event.is_set():
                 logging.info("Automation stopped by user - saving progress")
@@ -181,7 +183,6 @@ class EvolveAutomation:
             logging.info(f"Checking page {page_num}/{total_pages}")
 
             page_hashes = self._scrape_page(driver, page_num, existing_hashes, rows_by_year)
-            scrape_fn = lambda d, p: self._scrape_page(d, p, existing_hashes, rows_by_year)
             page_hashes = handle_duplicate_page(
                 driver, page_num, page_hashes, prev_page_hashes, scrape_fn)
             if page_hashes is None:

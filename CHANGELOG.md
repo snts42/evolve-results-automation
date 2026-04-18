@@ -4,6 +4,33 @@ All notable changes to E-volve SecureAssess Automation are documented in this fi
 
 ---
 
+## [v1.3.3] - 2026-04-16
+
+### Fixed
+- **PDF filename collision** (`parsing_utils.py`) - `report_filename()` now includes `Enrolment no.` so two candidates with the same first name, last name, test, result, and completion date no longer produce the same filename. Previously the second download would silently overwrite the first, and on the next run the second row would be incorrectly marked as having a PDF on disk. Existing PDFs re-download once under the new filename convention
+- **Partial PDF downloads treated as valid** (`parsing_utils.py`) - `download_pdf()` now writes to a `.tmp` file and atomically renames via `os.replace` on success. Interrupted downloads no longer leave partial PDFs that would be misidentified as valid on the next run. Temp files are cleaned up on failure
+- **Analytics workbook backup** (`excel_utils.py`) - `generate_analytics_workbook` copies the existing `analytics.xlsx` to `analytics.xlsx.bak` before overwriting, matching the per-year `.bak` pattern used since v1.3.0. If the save crashes mid-write the previous workbook can be restored manually
+- **Atomic Excel writes** (`excel_utils.py`) - new `_atomic_wb_save` helper replaces all four `wb.save(path)` call sites. Each save writes to `path + ".tmp"` and atomically renames via `os.replace` on success, so a crash mid-save can no longer leave a corrupt partial `.xlsx` on disk. The pre-run and pre-save `.bak` copies are retained for rollback to the previous good state. Matches the atomic-write pattern used for `credentials.enc`, `settings.json`, `last_run.json`, and PDF downloads
+- **Connection leaks in `urlopen` sites** (`parsing_utils.py`, `main.py`, `gui_tk.py`) - three `urlopen()` call sites (PDF download, preflight connectivity check, update check) now use `with` statements so sockets close reliably even when an exception is raised mid-read
+- **Silent startup shortcut errors** (`gui_tk.py`) - `_toggle_startup` now logs at debug level when shortcut creation or removal fails instead of swallowing the exception. Matches the debug-log pattern used across the codebase for non-critical fallbacks
+- **Silent Quick Open refresh errors** (`gui_tk.py`) - `_refresh_qo_years` now logs at debug level when `list_year_folders()` raises instead of silently returning
+- **Atomic JSON writes** (`config.py`, `gui_tk.py`) - `settings.json` and `last_run.json` (including the `tray_first_close_shown` flag) now write via a shared `atomic_json_write` helper that uses a temp file plus `os.replace`. Prevents truncation or corruption if the app is killed mid-write
+
+### Changed
+- **Extracted rebook section helper** (`excel_utils.py`) - the REBOOK OPPORTUNITIES and CANDIDATES TO REBOOK tables are now built by a single `_build_rebook_section(ws, r, opps, highlight_days=False)` helper used by both the per-year dashboard and the combined analytics Overview tab. Eliminates ~45 lines of duplicated table-building code
+- **Cleaner date-filter diagnostic** (`selenium_utils.py`) - removed verbose element-count diagnostic string from `set_date_filter` Step 2. The actionable `START_NOT_FOUND` and `BUTTON_NOT_FOUND` error labels are kept; the noise-every-run counters are gone
+- **`scrape_fn` lambda hoisted** (`main.py`) - the scrape callback used by `handle_duplicate_page` is now defined once before the page loop instead of recreated on every iteration. Purely cosmetic, no performance or correctness change
+- **Documented single-instance file handle** (`gui_tk.py`) - added an inline comment to `_acquire_instance_lock` explaining that the file handle is intentionally never closed (the OS releases the lock on process exit, which is the single-instance guard)
+- **Pinned PyInstaller version** (`build-release.yml`) - `pip install pyinstaller==6.11.1`. Previously unpinned install could silently break builds if a new PyInstaller release introduced incompatible flag behaviour
+- **Changelog v1.3.0 file references** (`CHANGELOG.md`) - backfilled `(filename.py)` references on every bullet in v1.3.0 Added/Changed/Build sections to match the convention used since v1.3.1. Also brought v1.3.1 orphan module-reorg lines into the same convention
+- **README rewrite** (`README.md`) - reflects v1.3.0+ features: analytics dashboard, scheduler, system tray, desktop notifications, read-only mode, combined analytics workbook, date range filter. Added `demo.gif`, `analytics.png`, `analytics-detail.png`, and `results.png` assets. Added Testing subsection and Option 3 install instructions for the test suite. Updated dependency list with `winotify`, `pystray`, `Pillow`
+
+### Added
+- **Basic unit tests** (`tests/test_basics.py`, `requirements-dev.txt`) - 13 offline `pytest` tests covering pure helpers: unique row hashing (deterministic, case-insensitive, enrolment-sensitive, missing-field safe), PDF cutoff date math (basic, year-wrap, large lookback), PDF filename generation (collision regression, forbidden-char sanitisation), date formatting (ISO input, already-formatted, empty/None), and full credential encryption round-trip. Run with `python -m pytest tests/ -v`
+- **Demo GIF and screenshots** (`README.md`) - `demo.gif` shows the lock screen, settings, and analytics flow; `analytics.png` shows the KPI cards and Monthly Volume chart; `analytics-detail.png` shows the year-over-year comparison, full exam breakdown table, and rebook opportunities; `results.png` shows the per-year `exam_results_YYYY.xlsx` with stripes and sortable columns. All four surface in the rewritten README
+
+---
+
 ## [v1.3.2] - 2026-04-15
 
 ### Fixed
@@ -47,38 +74,38 @@ All notable changes to E-volve SecureAssess Automation are documented in this fi
 - **Start with Windows toggle** (`gui_tk.py`) - no longer auto-detects existing shortcut; uses saved setting (default off)
 - **Analytics on stop** (`main.py`) - analytics now regenerates when new rows are added or PDFs are downloaded, including on early stop and PDF-only resume runs
 - **PDF date-range skip** (`main.py`) - PDF downloads skip rows outside the current date filter range instead of silently failing to find them in the table
-- Moved `handle_duplicate_page` to `selenium_utils.py`, `regenerate_analytics` to `excel_utils.py`, `download_pdf` to `parsing_utils.py` - `main.py` is now pure orchestration
-- Removed dead code (`excel_utils.py`): `_compute_resit_data` (unused return values), `_compute_cross_year_resits` (never called)
+- **Module reorganisation** (`main.py`, `selenium_utils.py`, `excel_utils.py`, `parsing_utils.py`) - moved `handle_duplicate_page` to `selenium_utils.py`, `regenerate_analytics` to `excel_utils.py`, `download_pdf` to `parsing_utils.py`. `main.py` is now pure orchestration
+- **Removed dead analytics helpers** (`excel_utils.py`) - dropped `_compute_resit_data` (unused return values) and `_compute_cross_year_resits` (never called)
 
 ---
 
 ## [v1.3.0] - 2026-04-13
 
 ### Added
-- **Stop automation** - cooperative `threading.Event` stop with confirmation dialog. Run button shows "Stopping..." and restores on complete/error
-- **Lock button** - header row next to Settings, returns to lock screen. Disabled during automation
-- **Zero-accounts guidance** - proactive log hint on unlock if no credentials configured
-- **Password strength indicator** - 4px colour bar + "Weak"/"Fair"/"Strong" text label on setup screen
-- **Disk space warning** - `shutil.disk_usage` check before automation, messagebox if < 100 MB free
-- **Excel backup** - `.bak` copy of each year's Excel file before automation starts, verified after write (warns on 0-byte backup)
-- **Desktop shortcut** - VBScript `CreateShortcut` helper with `app.ico` icon. Button in Help dialog with messagebox feedback. Shows info message if shortcut already exists
-- **Connection check** - two layers: `_preflight_check()` HTTP-200 for no-internet, Selenium login-field presence check for E-volve maintenance
-- **Keyboard shortcuts** - Ctrl+S (Settings), Ctrl+H (Help, always available), Ctrl+L (Lock). One-time log hint on startup. Ctrl+S and Ctrl+L unbound when locked
-- **Multi-year Quick Open** - custom year dropdown in Quick Open card, auto-discovers existing year folders. Refreshed after automation completes
-- **Retry on failure** - `max_attempts=2` per account with fresh browser on retry
-- **Persistent settings** - `settings.json` preserves Show browser, Desktop notifications, Minimize to tray, Scheduler, and Start with Windows toggles across sessions
-- **Toast notifications** - Windows desktop notifications on automation complete/error via `winotify` (guarded import, toggle in Settings). Hi-res PNG icon extracted from ICO via Pillow, cached to temp dir with mtime invalidation
-- **Auto update check** - background GitHub API check on startup, logs if a newer release is available. Fires once per session
-- **Excel Analytics sheet** - single compact "Analytics" tab auto-generated in each year's Excel file with 6 KPI cards (Total Exams, Unique Candidates, Extra Time Candidates, Most Popular Exam, Busiest Month, Resit Conversion - all with percentage subtitles), monthly volume chart, exam breakdown horizontal bar chart (matching red), rebook opportunities table, failed resit tracker with colour-coded results, extra time candidates table, and auto-generated key insights. Hidden `_ChartData` sheet for chart data. Brand-consistent styling with light pink stripes and red accents matching the Results tab. Both tabs use red tab colour
-- **Results tab styling** - 11pt data font, 11pt bold header, alternating light pink stripes, thin grey borders, red tab colour matching Analytics tab
-- **Percent column reordered** - moved next to Result column for better readability
-- **System tray** - minimize to tray on close (toggle in Settings), tray icon menu (Open / Open Excel / Open Reports / Run Now / Exit), first-close toast notification (shown once, stored in last_run.json), double-click opens app. Run Now hidden when locked. Tooltip shows lock state and last run info (refreshed after each run). Guarded import - degrades gracefully if `pystray` or `Pillow` missing
-- **Scheduler** - daily schedule slot (HH:MM) with enable toggle in Settings, live format validation with red hint, daemon poll thread (every 30s), fires only when app is unlocked and idle, skips with log message if locked or already running. Pre-seeded on startup to prevent re-fire after restart
-- **Start with Windows** - toggle in Settings creates/removes `.lnk` shortcut in Windows Startup folder via existing VBScript helper. Switch state reflects actual shortcut presence on open
-- **Auto read-only on startup** - app opens directly in read-only mode on subsequent launches (lock screen only on first-time setup). Unlock via header button navigates to full lock screen with password reset option
-- **Single-instance lock** - prevents multiple app instances writing to the same data files via OS-level file lock
-- **Window title** - shows "Read Only" when locked, reverts to normal on unlock
-- **PDF skip tracking** - `pdfs_skipped` counter added to `ProcessingStats`, surfaced in completion notification and log when PDF loop breaks unrecoverably
+- **Stop automation** (`main.py`, `gui_tk.py`) - cooperative `threading.Event` stop with confirmation dialog. Run button shows "Stopping..." and restores on complete/error
+- **Lock button** (`gui_tk.py`) - header row next to Settings, returns to lock screen. Disabled during automation
+- **Zero-accounts guidance** (`gui_tk.py`) - proactive log hint on unlock if no credentials configured
+- **Password strength indicator** (`gui_tk.py`) - 4px colour bar + "Weak"/"Fair"/"Strong" text label on setup screen
+- **Disk space warning** (`gui_tk.py`) - `shutil.disk_usage` check before automation, messagebox if < 100 MB free
+- **Excel backup** (`gui_tk.py`) - `.bak` copy of each year's Excel file before automation starts, verified after write (warns on 0-byte backup)
+- **Desktop shortcut** (`gui_tk.py`) - VBScript `CreateShortcut` helper with `app.ico` icon. Button in Help dialog with messagebox feedback. Shows info message if shortcut already exists
+- **Connection check** (`main.py`, `selenium_utils.py`) - two layers: `_preflight_check()` HTTP-200 for no-internet, Selenium login-field presence check for E-volve maintenance
+- **Keyboard shortcuts** (`gui_tk.py`) - Ctrl+S (Settings), Ctrl+H (Help, always available), Ctrl+L (Lock). One-time log hint on startup. Ctrl+S and Ctrl+L unbound when locked
+- **Multi-year Quick Open** (`gui_tk.py`, `config.py`) - custom year dropdown in Quick Open card, auto-discovers existing year folders. Refreshed after automation completes
+- **Retry on failure** (`main.py`) - `max_attempts=2` per account with fresh browser on retry
+- **Persistent settings** (`config.py`, `gui_tk.py`) - `settings.json` preserves Show browser, Desktop notifications, Minimize to tray, Scheduler, and Start with Windows toggles across sessions
+- **Toast notifications** (`gui_tk.py`) - Windows desktop notifications on automation complete/error via `winotify` (guarded import, toggle in Settings). Hi-res PNG icon extracted from ICO via Pillow, cached to temp dir with mtime invalidation
+- **Auto update check** (`gui_tk.py`) - background GitHub API check on startup, logs if a newer release is available. Fires once per session
+- **Excel Analytics sheet** (`excel_utils.py`) - single compact "Analytics" tab auto-generated in each year's Excel file with 6 KPI cards (Total Exams, Unique Candidates, Extra Time Candidates, Most Popular Exam, Busiest Month, Resit Conversion - all with percentage subtitles), monthly volume chart, exam breakdown horizontal bar chart (matching red), rebook opportunities table, failed resit tracker with colour-coded results, extra time candidates table, and auto-generated key insights. Hidden `_ChartData` sheet for chart data. Brand-consistent styling with light pink stripes and red accents matching the Results tab. Both tabs use red tab colour
+- **Results tab styling** (`excel_utils.py`) - 11pt data font, 11pt bold header, alternating light pink stripes, thin grey borders, red tab colour matching Analytics tab
+- **Percent column reordered** (`config.py`, `excel_utils.py`) - moved next to Result column for better readability
+- **System tray** (`gui_tk.py`) - minimize to tray on close (toggle in Settings), tray icon menu (Open / Open Excel / Open Reports / Run Now / Exit), first-close toast notification (shown once, stored in last_run.json), double-click opens app. Run Now hidden when locked. Tooltip shows lock state and last run info (refreshed after each run). Guarded import - degrades gracefully if `pystray` or `Pillow` missing
+- **Scheduler** (`gui_tk.py`) - daily schedule slot (HH:MM) with enable toggle in Settings, live format validation with red hint, daemon poll thread (every 30s), fires only when app is unlocked and idle, skips with log message if locked or already running. Pre-seeded on startup to prevent re-fire after restart
+- **Start with Windows** (`gui_tk.py`) - toggle in Settings creates/removes `.lnk` shortcut in Windows Startup folder via existing VBScript helper. Switch state reflects actual shortcut presence on open
+- **Auto read-only on startup** (`gui_tk.py`) - app opens directly in read-only mode on subsequent launches (lock screen only on first-time setup). Unlock via header button navigates to full lock screen with password reset option
+- **Single-instance lock** (`gui_tk.py`) - prevents multiple app instances writing to the same data files via OS-level file lock
+- **Window title** (`gui_tk.py`) - shows "Read Only" when locked, reverts to normal on unlock
+- **PDF skip tracking** (`main.py`) - `pdfs_skipped` counter added to `ProcessingStats`, surfaced in completion notification and log when PDF loop breaks unrecoverably
 
 ### Fixed
 - **load_existing_results data loss** (`excel_utils.py`) - always loads from "Results" sheet instead of active sheet, preventing silent data wipe when Analytics was the active tab
@@ -99,29 +126,29 @@ All notable changes to E-volve SecureAssess Automation are documented in this fi
 - **Popup overlap** (`gui_tk.py`) - opening one dropdown while another is open no longer orphans the first
 
 ### Changed
-- **Year dropdown** rebuilt as custom widget (frame+label+arrow) to match account selector style
-- **Shortcut hint** logs immediately with startup messages instead of delayed `after(500, ...)`
+- **Year dropdown** (`gui_tk.py`) - rebuilt as custom widget (frame+label+arrow) to match account selector style
+- **Shortcut hint** (`gui_tk.py`) - logs immediately with startup messages instead of delayed `after(500, ...)`
 - **Scale factor comment** (`selenium_utils.py`) - added explanation for headless `0.5`/`0.24` values
-- **Settings dialog height** reduced to 463px, main window height increased to 560px
-- **Account count label** shows "Locked" in read-only mode
+- **Settings dialog height** (`gui_tk.py`) - reduced to 463px, main window height increased to 560px
+- **Account count label** (`gui_tk.py`) - shows "Locked" in read-only mode
 - **Multi-monitor dialog positioning** (`gui_tk.py`) - Settings and Help dialogs center on the parent window's monitor via Windows `MonitorFromPoint` API, clamped to work area bounds
-- **CHANGELOG.md** now tracked in git (removed from `.gitignore`)
-- Removed dead imports (`glob`, `numbers`, `DataBarRule`, `BASE_DIR`), dead functions (`save_results`, `refresh_all_analytics`, `get_year_folder`), unused parameters, and stale `tray_first_close_shown` default
-- Consolidated duplicated dropdown popup logic into generic `_show_popup`/`_close_popup`, shutdown logic into `_graceful_shutdown`, control reset into `_reset_controls`
-- Replaced 5 scattered year-folder glob patterns with shared `list_year_folders`/`list_year_excel_files` helpers in `config.py`
-- Replaced duplicated Results tab formatting with module-level constants (`_HDR_FONT`, `_HDR_FILL`, `_STRIPE_FILL`, `_THIN_BORDER`, `_DATA_FONT`)
-- Moved inline `logging`/`tkinter` imports to top-level
-- Renamed `compute_by_exam` to `_compute_by_exam` (internal only)
+- **CHANGELOG.md tracked in git** (`.gitignore`) - removed CHANGELOG.md from `.gitignore` so release history is visible on GitHub
+- **Removed dead imports and helpers** (`gui_tk.py`, `excel_utils.py`) - dropped unused `glob`, `numbers`, `DataBarRule`, `BASE_DIR` imports; dead functions `save_results`, `refresh_all_analytics`, `get_year_folder`; stale `tray_first_close_shown` default
+- **Consolidated dropdown and shutdown helpers** (`gui_tk.py`) - generic `_show_popup`/`_close_popup`, `_graceful_shutdown`, `_reset_controls` replace duplicated inline logic
+- **Shared year-folder helpers** (`config.py`) - replaced 5 scattered year-folder glob patterns with `list_year_folders`/`list_year_excel_files`
+- **Shared Results tab styling constants** (`excel_utils.py`) - module-level `_HDR_FONT`, `_HDR_FILL`, `_STRIPE_FILL`, `_THIN_BORDER`, `_DATA_FONT` replace inline formatting duplication
+- **Top-level imports** (`gui_tk.py`) - moved inline `logging`/`tkinter` imports to the top of the module
+- **Internal naming** (`excel_utils.py`) - renamed `compute_by_exam` to `_compute_by_exam` to reflect its internal-only use
 
 ### Build
-- **Removed `--exclude-module PIL/Pillow`** from CI workflow - Pillow is now a real runtime dependency (tray icon, notification icon extraction)
-- **Added `--hidden-import pystray._win32`** and `--collect-all pystray` - pystray loads its Windows backend dynamically; PyInstaller missed it without explicit hints
-- **Added `--hidden-import winotify`** - same dynamic loading issue
+- **Removed `--exclude-module PIL/Pillow`** (`build-release.yml`) - Pillow is now a real runtime dependency (tray icon, notification icon extraction)
+- **Added `--hidden-import pystray._win32` and `--collect-all pystray`** (`build-release.yml`) - pystray loads its Windows backend dynamically; PyInstaller missed it without explicit hints
+- **Added `--hidden-import winotify`** (`build-release.yml`) - same dynamic loading issue as pystray
 - **Added Pillow codec pruning step** (`build-release.yml`) - removes `_avif`, `_webp`, `_imagingcms`, `_imagingft`, `_imagingtk` PYD files post-build. Only PNG/RGBA needed for tray and notification icons. Saves ~9 MB unzipped
 
 ---
 
-## [v1.2.1] - 2026-04-08
+## [v1.2.1] - 2026-04-09
 
 ### Fixed
 - **Log file never rotates between runs** (`logging_utils.py`) - `setup_logger` now closes and removes the old `_FlushHandler` before adding a new one, so each automation run writes to a fresh log file.

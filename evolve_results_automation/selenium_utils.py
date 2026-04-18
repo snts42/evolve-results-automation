@@ -244,30 +244,19 @@ def set_date_filter(driver, months_back=1, timeout=10):
         filter_content.click()
         time.sleep(2)
         
-        # Step 2: Find the start date container and click the dropdown button
-        # Search directly from document (not scoped to overlay wrapper which may be empty)
-        diag = driver.execute_script("""
-            // Diagnostic: check what elements exist in the DOM
-            var overlayWrappers = document.querySelectorAll('.dx-datagrid-filter-range-overlay');
-            var overlayContents = document.querySelectorAll('.dx-overlay-content.dx-datagrid');
-            var startContainers = document.querySelectorAll('.dx-datagrid-filter-range-start');
-            var info = 'wrappers:' + overlayWrappers.length + 
-                       ' contents:' + overlayContents.length + 
-                       ' starts:' + startContainers.length;
-            
-            // Find the start container directly from document
+        # Step 2: Find the start date container and click the dropdown button.
+        # Search directly from document, not scoped to an overlay wrapper which
+        # may be empty before the calendar is rendered.
+        result = driver.execute_script("""
             var startContainer = document.querySelector('.dx-datagrid-filter-range-start');
-            if (!startContainer) return 'START_NOT_FOUND|' + info;
-            
-            // Find the dropdown button
+            if (!startContainer) return 'START_NOT_FOUND';
             var btn = startContainer.querySelector('.dx-dropdowneditor-button');
-            if (!btn) return 'BUTTON_NOT_FOUND|' + info + '|' + startContainer.innerHTML.substring(0, 200);
-            
+            if (!btn) return 'BUTTON_NOT_FOUND';
             btn.click();
-            return 'CLICKED_BUTTON|' + info;
+            return 'CLICKED';
         """)
-        if not diag.startswith('CLICKED_BUTTON'):
-            logging.error(f"Could not click dropdown button. Diagnostic: {diag}")
+        if result != 'CLICKED':
+            logging.error(f"Could not click dropdown button: {result}")
             return False
         
         time.sleep(2)

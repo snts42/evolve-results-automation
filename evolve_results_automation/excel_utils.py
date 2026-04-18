@@ -1,5 +1,6 @@
 import os
 import re
+import shutil
 import logging
 from collections import Counter, defaultdict
 from datetime import datetime
@@ -21,6 +22,29 @@ def _normalize(val):
     return "" if s.lower() == "nan" else s
 
 
+def _atomic_wb_save(wb, path):
+    """Save an openpyxl workbook atomically via tempfile + os.replace.
+
+    A crash mid-save leaves no partial ``.xlsx`` on disk: either the final
+    path contains the fully-written new version, or the previous version is
+    untouched. Matches the pattern used for ``credentials.enc``,
+    ``settings.json``, ``last_run.json``, and PDF downloads. The per-year
+    and analytics ``.bak`` copies remain untouched and provide rollback to
+    the previous good state on top of this crash-time guarantee.
+    """
+    tmp = path + ".tmp"
+    try:
+        wb.save(tmp)
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def initialize_excel(filepath: str):
     if not os.path.exists(filepath):
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
@@ -29,7 +53,7 @@ def initialize_excel(filepath: str):
         ws = wb.active
         ws.title = "Results"
         ws.append(COLUMNS)
-        wb.save(filepath)
+        _atomic_wb_save(wb, filepath)
         wb.close()
 
 
@@ -163,7 +187,7 @@ def save_year_to_excel(year, rows_by_year, silent=False):
 
     wb = _build_results_workbook(combined)
     try:
-        wb.save(excel_file)
+        _atomic_wb_save(wb, excel_file)
     finally:
         wb.close()
     if not silent:
@@ -650,9 +674,68 @@ def add_analytics_sheet(filepath, rows=None, all_rows=None):
         if wb.active and wb.active.title not in ("Results", "Analytics"):
             wb.active.title = "Results"
         _add_analytics_to_wb(wb, rows, all_rows=all_rows)
-        wb.save(filepath)
+        _atomic_wb_save(wb, filepath)
     finally:
         wb.close()
+
+
+def _build_rebook_section(ws, r, rebook_opps, highlight_days=False):
+    """Build REBOOK OPPORTUNITIES summary + CANDIDATES TO REBOOK detail tables.
+
+    When highlight_days=True, the Days Ago cells in the detail table are
+    highlighted with red fill and red bold font. This is used on the combined
+    analytics Overview tab to draw attention to the actionable fails.
+
+    Returns the next available row after the section and the trailing blank row.
+    """
+    r = _section(ws, r, "REBOOK OPPORTUNITIES")
+    if rebook_opps:
+        exam_summary = defaultdict(lambda: {"count": 0, "total_days": 0})
+        for rb in rebook_opps:
+            es = exam_summary[rb["exam"]]
+            es["count"] += 1
+            es["total_days"] += rb["days_ago"]
+        summary_layout = [(1, 4), (5, 7), (8, 10), (11, 12)]
+        _wide_tbl_header(ws, r, ["Exam", "Candidates", "Avg Days Ago",
+                                  "% of Total"], summary_layout)
+        r += 1
+        for idx, (exam, s) in enumerate(sorted(exam_summary.items(),
+                                                key=lambda x: x[1]["count"],
+                                                reverse=True)):
+            avg_days = round(s["total_days"] / s["count"]) if s["count"] else 0
+            pct = f"{round(s['count'] / len(rebook_opps) * 100)}%"
+            _wide_tbl_row(ws, r, [_exam_short(exam), s["count"],
+                                   avg_days, pct],
+                          summary_layout, stripe=(idx % 2 == 1))
+            r += 1
+        r += 1
+
+        r = _section(ws, r, "CANDIDATES TO REBOOK")
+        _wide_tbl_header(ws, r, ["Candidate", "Enrolment", "Exam",
+                                  "Attempts", "Last Failed", "Days Ago"],
+                         _REBOOK_LAYOUT)
+        r += 1
+        for idx, rb in enumerate(rebook_opps):
+            _wide_tbl_row(ws, r, [rb["name"], rb["enrolment"],
+                                   _exam_short(rb["exam"]),
+                                   rb["attempts"],
+                                   rb["last_fail"], rb["days_ago"]],
+                          _REBOOK_LAYOUT, stripe=(idx % 2 == 1))
+            if highlight_days:
+                for ci in [11, 12]:
+                    cell = ws.cell(row=r, column=ci)
+                    cell.fill = PatternFill('solid', fgColor=_RED_BG)
+                    cell.font = Font(bold=True, size=9, color=_RED_FG)
+            r += 1
+    else:
+        ws.merge_cells(start_row=r, start_column=1,
+                       end_row=r, end_column=_NUM_COLS)
+        ws.cell(row=r, column=1,
+                value="  No rebook opportunities - all fails have "
+                      "rebooked or passed on resit").font = _INSIGHT_FONT
+        r += 1
+    r += 1
+    return r
 
 
 # ── Shared year-level dashboard builder ───────────────────────────────────
@@ -769,50 +852,8 @@ def _build_year_dashboard(wb, ws, rows, all_rows, year,
             r += 1
         r += 1
 
-    # ── Rebook Opportunities (summary by exam) ────────────────────────
-    r = _section(ws, r, "REBOOK OPPORTUNITIES")
-    if rebook_opps:
-        exam_summary = defaultdict(lambda: {"count": 0, "total_days": 0})
-        for rb in rebook_opps:
-            es = exam_summary[rb["exam"]]
-            es["count"] += 1
-            es["total_days"] += rb["days_ago"]
-        summary_layout = [(1, 4), (5, 7), (8, 10), (11, 12)]
-        _wide_tbl_header(ws, r, ["Exam", "Candidates", "Avg Days Ago",
-                                  "% of Total"], summary_layout)
-        r += 1
-        for idx, (exam, s) in enumerate(sorted(exam_summary.items(),
-                                                key=lambda x: x[1]["count"],
-                                                reverse=True)):
-            avg_days = round(s["total_days"] / s["count"]) if s["count"] else 0
-            pct = f"{round(s['count'] / len(rebook_opps) * 100)}%"
-            _wide_tbl_row(ws, r, [_exam_short(exam), s["count"],
-                                   avg_days, pct],
-                          summary_layout, stripe=(idx % 2 == 1))
-            r += 1
-        r += 1
-
-        # ── Candidates to Rebook (detail table) ──────────────────────
-        r = _section(ws, r, "CANDIDATES TO REBOOK")
-        _wide_tbl_header(ws, r, ["Candidate", "Enrolment", "Exam",
-                                  "Attempts", "Last Failed", "Days Ago"],
-                         _REBOOK_LAYOUT)
-        r += 1
-        for idx, rb in enumerate(rebook_opps):
-            _wide_tbl_row(ws, r, [rb["name"], rb["enrolment"],
-                                   _exam_short(rb["exam"]),
-                                   rb["attempts"],
-                                   rb["last_fail"], rb["days_ago"]],
-                          _REBOOK_LAYOUT, stripe=(idx % 2 == 1))
-            r += 1
-    else:
-        ws.merge_cells(start_row=r, start_column=1,
-                       end_row=r, end_column=_NUM_COLS)
-        ws.cell(row=r, column=1,
-                value="  No rebook opportunities - all fails have "
-                      "rebooked or passed on resit").font = _INSIGHT_FONT
-        r += 1
-    r += 1
+    # ── Rebook Opportunities (summary + candidates to rebook) ─────────
+    r = _build_rebook_section(ws, r, rebook_opps)
 
     # ── Extra Time ────────────────────────────────────────────────────
     r = _section(ws, r, "EXTRA TIME CANDIDATES")
@@ -1178,55 +1219,9 @@ def _build_analytics_overview_tab(wb, all_rows, rows_by_year):
         r += 1
     r += 1
 
-    # ── Rebook Opportunities (summary by exam) ────────────────────────
-    r = _section(ws, r, "REBOOK OPPORTUNITIES")
-    if rebook_opps:
-        exam_summary = defaultdict(lambda: {"count": 0, "total_days": 0})
-        for rb in rebook_opps:
-            es = exam_summary[rb["exam"]]
-            es["count"] += 1
-            es["total_days"] += rb["days_ago"]
-        summary_layout = [(1, 4), (5, 7), (8, 10), (11, 12)]
-        _wide_tbl_header(ws, r, ["Exam", "Candidates", "Avg Days Ago",
-                                  "% of Total"], summary_layout)
-        r += 1
-        for idx, (exam, s) in enumerate(sorted(exam_summary.items(),
-                                                key=lambda x: x[1]["count"],
-                                                reverse=True)):
-            avg_days = round(s["total_days"] / s["count"]) if s["count"] else 0
-            pct = f"{round(s['count'] / len(rebook_opps) * 100)}%"
-            _wide_tbl_row(ws, r, [_exam_short(exam), s["count"],
-                                   avg_days, pct],
-                          summary_layout, stripe=(idx % 2 == 1))
-            r += 1
-        r += 1
-
-        # ── Candidates to Rebook (detail table) ──────────────────────
-        r = _section(ws, r, "CANDIDATES TO REBOOK")
-        _wide_tbl_header(ws, r, ["Candidate", "Enrolment", "Exam",
-                                  "Attempts", "Last Failed", "Days Ago"],
-                         _REBOOK_LAYOUT)
-        r += 1
-        for idx, rb in enumerate(rebook_opps):
-            _wide_tbl_row(ws, r, [rb["name"], rb["enrolment"],
-                                   _exam_short(rb["exam"]),
-                                   rb["attempts"],
-                                   rb["last_fail"], rb["days_ago"]],
-                          _REBOOK_LAYOUT, stripe=(idx % 2 == 1))
-            # Highlight days ago column since they're all actionable fails
-            for ci in [11, 12]:
-                cell = ws.cell(row=r, column=ci)
-                cell.fill = PatternFill('solid', fgColor=_RED_BG)
-                cell.font = Font(bold=True, size=9, color=_RED_FG)
-            r += 1
-    else:
-        ws.merge_cells(start_row=r, start_column=1,
-                       end_row=r, end_column=_NUM_COLS)
-        ws.cell(row=r, column=1,
-                value="  No rebook opportunities - all fails have "
-                      "rebooked or passed on resit").font = _INSIGHT_FONT
-        r += 1
-    r += 1
+    # ── Rebook Opportunities (summary + candidates to rebook) ─────────
+    # highlight_days=True draws attention to the actionable Days Ago cells
+    r = _build_rebook_section(ws, r, rebook_opps, highlight_days=True)
 
     # Footer
     centre_names = ", ".join(_short_centre_name(cn) for cn in sorted(centres.keys()))
@@ -1280,7 +1275,15 @@ def generate_analytics_workbook(all_rows=None, rows_by_year=None):
         for yr in sorted(rows_by_year.keys(), reverse=True):
             _build_analytics_year_tab(wb, str(yr), rows_by_year[yr], all_rows)
 
-        wb.save(ANALYTICS_FILE)
+        # Back up the previous analytics.xlsx before overwriting so a crash
+        # mid-save leaves a restorable copy. Matches the `.bak` pattern used
+        # for year Excel files before automation starts.
+        if os.path.exists(ANALYTICS_FILE):
+            try:
+                shutil.copy2(ANALYTICS_FILE, ANALYTICS_FILE + ".bak")
+            except OSError as e:
+                logging.debug(f"Could not create analytics backup: {e}")
+        _atomic_wb_save(wb, ANALYTICS_FILE)
         logging.debug(f"Analytics saved to {os.path.basename(ANALYTICS_FILE)}")
     finally:
         wb.close()

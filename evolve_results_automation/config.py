@@ -5,7 +5,7 @@ import json
 import logging
 from datetime import datetime
 
-APP_VER = "v1.3.2"
+APP_VER = "v1.3.3"
 
 if getattr(sys, 'frozen', False):
     # Running as a PyInstaller bundled .exe - use the exe's directory
@@ -83,6 +83,28 @@ _DEFAULT_SETTINGS = {
     "minimize_to_tray": False,
 }
 
+def atomic_json_write(path: str, data) -> None:
+    """Write JSON to ``path`` atomically via a temp file + ``os.replace``.
+
+    If the process is killed mid-write the final file is left untouched
+    (either the previous version remains, or it does not exist yet). The
+    temp file is removed on failure. Same crash-safe pattern used by
+    ``secure_credentials._save_credentials`` for consistency across the
+    codebase.
+    """
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
+        raise
+
 def load_settings():
     """Load user settings from disk, returning defaults for missing keys."""
     settings = dict(_DEFAULT_SETTINGS)
@@ -97,10 +119,9 @@ def load_settings():
     return settings
 
 def save_settings(settings: dict):
-    """Persist user settings to disk."""
+    """Persist user settings to disk (atomic write)."""
     try:
-        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
-            json.dump(settings, f, indent=2)
+        atomic_json_write(SETTINGS_FILE, settings)
     except Exception as e:
         logging.debug(f"Could not save settings: {e}")
 
